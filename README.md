@@ -74,6 +74,7 @@ mem save "list files by size" -c "ls -lhS"
 
 # Ask your past self
 mem ask "how to list large files?"
-```,old_string:,old_string:
+,old_string:,old_string:
+```
 
 **MEM grows with you. One week in, it's a notebook. One year in, it's your most valuable asset.**
