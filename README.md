@@ -31,16 +31,49 @@ Everything stays on your machine. MEM uses **Local Vector Embeddings** and a **L
 
 ---
 
-## ⚡ Quick Start
+## ⚡ Practical Examples
+
+### 1. Complex Infrastructure Commands
+```bash
+# Save a specific setup sequence
+mem save "Postgres Replication Setup" -c "apt install postgresql-15; sed -i 's/wal_level = replica/wal_level = logical/' /etc/postgresql/15/main/postgresql.conf"
+
+# Find it 6 months later
+mem ask "how did I enable logical replication?"
+```
+
+### 2. The "I'll Forget This" One-Liner
+```bash
+# Save that 3-line find/xargs combo
+mem save "delete all empty directories" -c "find . -type d -empty -delete"
+
+# Recall it instantly
+mem ask "how to clean empty folders?"
+```
+
+### 3. Recording a Debugging Session
+```bash
+# Record your flow while fixing a bug
+mem watch
+# $ ssh production-server
+# $ journalctl -u api-service -n 100
+# $ systemctl restart api-service
+mem remember "restart api-service on prod"
+
+# Later, ask how you handled the crash
+mem ask "how did I fix the api-service crash?"
+```
+
+---
+
+## 🏁 Quick Start
 
 ```bash
-# Record a complex fix
-mem watch
-# ... (do your work) ...
-mem remember "fixing postgres connection leak"
+# Save your first command
+mem save "list files by size" -c "ls -lhS"
 
-# Ask your past self a question later
-mem ask "how did I fix postgres?"
-```
+# Ask your past self
+mem ask "how to list large files?"
+```,old_string:,old_string:
 
 **MEM grows with you. One week in, it's a notebook. One year in, it's your most valuable asset.**
