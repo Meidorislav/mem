@@ -49,8 +49,18 @@ var watchCmd = &cobra.Command{
 	},
 }
 
+var rememberCmd = &cobra.Command{
+	Use:   "remember [description]",
+	Short: "Transform terminal history into a memory",
+	Args:  cobra.MinimumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Printf("Remembering session: %s\n", args[0])
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(saveCmd)
 	rootCmd.AddCommand(askCmd)
 	rootCmd.AddCommand(watchCmd)
+	rootCmd.AddCommand(rememberCmd)
 }
