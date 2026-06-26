@@ -3,7 +3,9 @@ package commands
 import (
 	"fmt"
 	"os"
+	"strings"
 
+	"github.com/meidori/mem/internal/storage"
 	"github.com/spf13/cobra"
 )
 
@@ -23,12 +25,38 @@ func Execute() {
 	}
 }
 
+var saveFlags struct {
+	commands []string
+	tags     []string
+}
+
 var saveCmd = &cobra.Command{
 	Use:   "save [title]",
 	Short: "Capture a new memory",
 	Args:  cobra.MinimumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("Saving memory: %s\n", args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		store, err := storage.NewStore()
+		if err != nil {
+			return fmt.Errorf("opening store: %w", err)
+		}
+		defer store.Close()
+
+		title := strings.Join(args, " ")
+		m := &storage.Memory{
+			Title:  title,
+			Source: storage.SourceSave,
+			Tags:   saveFlags.tags,
+		}
+		for _, c := range saveFlags.commands {
+			m.Commands = append(m.Commands, storage.Command{Command: c})
+		}
+
+		if err := store.SaveMemory(m); err != nil {
+			return fmt.Errorf("saving memory: %w", err)
+		}
+
+		fmt.Printf("Saved: %s\n", title)
+		return nil
 	},
 }
 
@@ -59,6 +87,9 @@ var rememberCmd = &cobra.Command{
 }
 
 func init() {
+	saveCmd.Flags().StringArrayVarP(&saveFlags.commands, "command", "c", nil, "shell command to attach")
+	saveCmd.Flags().StringArrayVarP(&saveFlags.tags, "tag", "t", nil, "tag to assign")
+
 	rootCmd.AddCommand(saveCmd)
 	rootCmd.AddCommand(askCmd)
 	rootCmd.AddCommand(watchCmd)
