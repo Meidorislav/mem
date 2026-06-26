@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS commands (
   position    INTEGER NOT NULL,
   command     TEXT NOT NULL,
   output      TEXT,
-  created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+  created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Tags
@@ -60,6 +61,7 @@ CREATE TABLE IF NOT EXISTS embedding_status (
   command_id          INTEGER REFERENCES commands(id) ON DELETE CASCADE,
   embedding_config_id INTEGER NOT NULL REFERENCES embedding_configs(id),
   chunk_index         INTEGER NOT NULL DEFAULT 0,
+  content_hash        TEXT,
   indexed_at          DATETIME,
   needs_reindex       BOOLEAN DEFAULT FALSE,
   UNIQUE(memory_id, command_id, chunk_index, embedding_config_id)
