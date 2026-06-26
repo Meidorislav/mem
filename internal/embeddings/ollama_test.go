@@ -10,7 +10,7 @@ import (
 )
 
 func TestEmbed(t *testing.T) {
-	want := []float64{0.1, 0.2, 0.3}
+	want := []float32{0.1, 0.2, 0.3}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/embeddings" {

@@ -27,7 +27,7 @@ func NewClientWithURL(model, baseURL string) *Client {
 	}
 }
 
-func (c *Client) Embed(text string) ([]float64, error) {
+func (c *Client) Embed(text string) ([]float32, error) {
 	body, err := json.Marshal(map[string]string{
 		"model":  c.model,
 		"prompt": text,
@@ -47,7 +47,7 @@ func (c *Client) Embed(text string) ([]float64, error) {
 	}
 
 	var result struct {
-		Embedding []float64 `json:"embedding"`
+		Embedding []float32 `json:"embedding"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decoding response: %w", err)
