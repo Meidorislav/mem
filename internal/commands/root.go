@@ -1,11 +1,14 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/meidori/mem/internal/embeddings"
 	"github.com/meidori/mem/internal/storage"
+	"github.com/meidori/mem/internal/vector"
 	"github.com/spf13/cobra"
 )
 
@@ -41,6 +44,24 @@ var saveCmd = &cobra.Command{
 		}
 		defer store.Close()
 
+		// Initialize Embeddings and Vector DB
+		const defaultModel = "nomic-embed-text"
+		const defaultDims = 768
+
+		embClient := embeddings.NewClient(defaultModel)
+		
+		vecStore, err := vector.NewStore(defaultDims)
+		if err != nil {
+			return fmt.Errorf("opening vector store: %w", err)
+		}
+		defer vecStore.Close()
+
+		// Get or create embedding config
+		embConfig, err := store.GetOrCreateActiveEmbeddingConfig(defaultModel, defaultDims)
+		if err != nil {
+			return fmt.Errorf("getting active embedding config: %w", err)
+		}
+
 		title := strings.Join(args, " ")
 		m := &storage.Memory{
 			Title:  title,
@@ -53,6 +74,42 @@ var saveCmd = &cobra.Command{
 
 		if err := store.SaveMemory(m); err != nil {
 			return fmt.Errorf("saving memory: %w", err)
+		}
+
+		// Process chunks
+		chunks := ChunkMemory(m)
+		for _, chunk := range chunks {
+			// Check if already indexed with this hash
+			status, err := store.GetEmbeddingStatus(m.ID, chunk.CommandID, chunk.ChunkIndex, embConfig.ID)
+			if err != nil {
+				return fmt.Errorf("getting embedding status: %w", err)
+			}
+			if status != nil && status.ContentHash == chunk.Hash && !status.NeedsReindex {
+				continue // already indexed
+			}
+
+			// Generate embedding
+			vec, err := embClient.Embed(chunk.Text)
+			if err != nil {
+				return fmt.Errorf("generating embedding: %w", err)
+			}
+
+			// Insert into LanceDB
+			if err := vecStore.Insert(context.Background(), m.ID, vec); err != nil {
+				return fmt.Errorf("inserting into vector store: %w", err)
+			}
+
+			// Update SQLite status
+			newStatus := &storage.EmbeddingStatus{
+				MemoryID:          m.ID,
+				CommandID:         chunk.CommandID,
+				EmbeddingConfigID: embConfig.ID,
+				ChunkIndex:        chunk.ChunkIndex,
+				ContentHash:       chunk.Hash,
+			}
+			if err := store.UpsertEmbeddingStatus(newStatus); err != nil {
+				return fmt.Errorf("upserting embedding status: %w", err)
+			}
 		}
 
 		fmt.Printf("Saved: %s\n", title)

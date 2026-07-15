@@ -139,3 +139,88 @@ func TestGetMemoriesByIDsNoCrossContamination(t *testing.T) {
 			memories[1].Commands, memories[1].Tags)
 	}
 }
+
+func TestEmbeddingConfig(t *testing.T) {
+	store := newTestStore(t)
+
+	// Create new config
+	ec1, err := store.GetOrCreateActiveEmbeddingConfig("test-model", 128)
+	if err != nil {
+		t.Fatalf("GetOrCreateActiveEmbeddingConfig: %v", err)
+	}
+	if ec1.ID == 0 {
+		t.Error("expected non-zero ID for new config")
+	}
+	if ec1.ModelName != "test-model" {
+		t.Errorf("expected test-model, got %s", ec1.ModelName)
+	}
+	if ec1.Dimensions != 128 {
+		t.Errorf("expected 128 dimensions, got %d", ec1.Dimensions)
+	}
+
+	// Fetch same config
+	ec2, err := store.GetOrCreateActiveEmbeddingConfig("test-model", 128)
+	if err != nil {
+		t.Fatalf("GetOrCreateActiveEmbeddingConfig: %v", err)
+	}
+	if ec1.ID != ec2.ID {
+		t.Errorf("expected same ID %d, got %d", ec1.ID, ec2.ID)
+	}
+}
+
+func TestEmbeddingStatus(t *testing.T) {
+	store := newTestStore(t)
+	memID := saveTestMemory(t, store, "status test", []string{"cmd1"}, nil)
+
+	// Fetch memory to get command ID
+	m, _ := store.GetMemory(memID)
+	cmdID := m.Commands[0].ID
+
+	// Create actual config to satisfy foreign key
+	ec, err := store.GetOrCreateActiveEmbeddingConfig("test-model", 10)
+	if err != nil {
+		t.Fatalf("GetOrCreateActiveEmbeddingConfig: %v", err)
+	}
+	configID := ec.ID
+
+	status := &EmbeddingStatus{
+		MemoryID:          memID,
+		CommandID:         &cmdID,
+		EmbeddingConfigID: configID,
+		ChunkIndex:        0,
+		ContentHash:       "hash1",
+	}
+
+	// Upsert new status
+	err = store.UpsertEmbeddingStatus(status)
+	if err != nil {
+		t.Fatalf("UpsertEmbeddingStatus: %v", err)
+	}
+	if status.ID == 0 {
+		t.Error("expected non-zero ID for new status")
+	}
+
+	// Fetch status
+	st, err := store.GetEmbeddingStatus(memID, &cmdID, 0, configID)
+	if err != nil {
+		t.Fatalf("GetEmbeddingStatus: %v", err)
+	}
+	if st == nil {
+		t.Fatal("expected status, got nil")
+	}
+	if st.ContentHash != "hash1" {
+		t.Errorf("expected hash1, got %s", st.ContentHash)
+	}
+
+	// Upsert with new hash (update existing)
+	status.ContentHash = "hash2"
+	err = store.UpsertEmbeddingStatus(status)
+	if err != nil {
+		t.Fatalf("UpsertEmbeddingStatus (update): %v", err)
+	}
+
+	st, _ = store.GetEmbeddingStatus(memID, &cmdID, 0, configID)
+	if st.ContentHash != "hash2" {
+		t.Errorf("expected hash2, got %s", st.ContentHash)
+	}
+}

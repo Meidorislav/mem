@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -142,13 +143,18 @@ func (s *Store) SaveMemory(m *Memory) error {
 	m.ID = memID
 
 	for i, cmd := range m.Commands {
-		_, err := tx.Exec(`
+		cmdRes, err := tx.Exec(`
 			INSERT INTO commands (memory_id, position, command, output)
 			VALUES (?, ?, ?, ?)
 		`, memID, i, cmd.Command, cmd.Output)
 		if err != nil {
 			return fmt.Errorf("insert command %d: %w", i, err)
 		}
+		cmdID, err := cmdRes.LastInsertId()
+		if err != nil {
+			return err
+		}
+		m.Commands[i].ID = cmdID
 	}
 
 	for _, tagName := range m.Tags {
@@ -298,4 +304,99 @@ func (s *Store) loadTags(placeholders string, args []any, byID map[int64]*Memory
 		return fmt.Errorf("iterate tags: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) GetOrCreateActiveEmbeddingConfig(modelName string, dims int) (*EmbeddingConfig, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var ec EmbeddingConfig
+	err = tx.QueryRow(`
+		SELECT id, model_name, version, dimensions, is_active, created_at
+		FROM embedding_configs
+		WHERE model_name = ? AND is_active = TRUE
+		LIMIT 1
+	`, modelName).Scan(&ec.ID, &ec.ModelName, &ec.Version, &ec.Dimensions, &ec.IsActive, &ec.CreatedAt)
+
+	if err == sql.ErrNoRows {
+		res, err := tx.Exec(`
+			INSERT INTO embedding_configs (model_name, dimensions, is_active)
+			VALUES (?, ?, TRUE)
+		`, modelName, dims)
+		if err != nil {
+			return nil, fmt.Errorf("insert embedding config: %w", err)
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return nil, err
+		}
+		ec.ID = id
+		ec.ModelName = modelName
+		ec.Dimensions = dims
+		ec.IsActive = true
+		ec.CreatedAt = time.Now()
+	} else if err != nil {
+		return nil, fmt.Errorf("query embedding config: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	return &ec, nil
+}
+
+func (s *Store) UpsertEmbeddingStatus(status *EmbeddingStatus) error {
+	res, err := s.db.Exec(`
+		INSERT INTO embedding_status (memory_id, command_id, embedding_config_id, chunk_index, content_hash, indexed_at, needs_reindex)
+		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, FALSE)
+		ON CONFLICT(memory_id, command_id, chunk_index, embedding_config_id) DO UPDATE SET
+			content_hash = excluded.content_hash,
+			indexed_at = CURRENT_TIMESTAMP,
+			needs_reindex = FALSE
+	`, status.MemoryID, status.CommandID, status.EmbeddingConfigID, status.ChunkIndex, status.ContentHash)
+	if err != nil {
+		return fmt.Errorf("upsert embedding status: %w", err)
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	if id > 0 {
+		status.ID = id
+	}
+	return nil
+}
+
+func (s *Store) GetEmbeddingStatus(memoryID int64, commandID *int64, chunkIndex int, configID int64) (*EmbeddingStatus, error) {
+	var st EmbeddingStatus
+	
+	// handle nullable command_id for sqlite
+	var cmdQuery string
+	var args []any
+	if commandID == nil {
+		cmdQuery = "command_id IS NULL"
+		args = []any{memoryID, chunkIndex, configID}
+	} else {
+		cmdQuery = "command_id = ?"
+		args = []any{memoryID, *commandID, chunkIndex, configID}
+	}
+
+	err := s.db.QueryRow(fmt.Sprintf(`
+		SELECT id, memory_id, command_id, embedding_config_id, chunk_index, content_hash, indexed_at, needs_reindex
+		FROM embedding_status
+		WHERE memory_id = ? AND %s AND chunk_index = ? AND embedding_config_id = ?
+	`, cmdQuery), args...).Scan(&st.ID, &st.MemoryID, &st.CommandID, &st.EmbeddingConfigID, &st.ChunkIndex, &st.ContentHash, &st.IndexedAt, &st.NeedsReindex)
+
+	if err == sql.ErrNoRows {
+		return nil, nil // not found
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &st, nil
 }
