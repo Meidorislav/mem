@@ -2,12 +2,17 @@ package storage
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
+
+// ErrNotFound is returned when a requested memory does not exist.
+var ErrNotFound = errors.New("memory not found")
 
 const schema = `
 -- Memory entry
@@ -90,7 +95,10 @@ func NewStore() (*Store, error) {
 		return nil, fmt.Errorf("creating app dir: %w", err)
 	}
 
-	dbPath := filepath.Join(appDir, "mem.db")
+	return NewStoreAt(filepath.Join(appDir, "mem.db"))
+}
+
+func NewStoreAt(dbPath string) (*Store, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
@@ -166,4 +174,128 @@ func (s *Store) SaveMemory(m *Memory) error {
 	}
 
 	return tx.Commit()
+}
+
+func (s *Store) GetMemory(id int64) (*Memory, error) {
+	memories, err := s.GetMemoriesByIDs([]int64{id})
+	if err != nil {
+		return nil, err
+	}
+	if len(memories) == 0 {
+		return nil, ErrNotFound
+	}
+	return &memories[0], nil
+}
+
+// GetMemoriesByIDs loads memories with their commands and tags.
+// Results preserve the order of ids; unknown ids are skipped so callers
+// can pass vector-search results directly without existence checks.
+func (s *Store) GetMemoriesByIDs(ids []int64) ([]Memory, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	placeholders := strings.Repeat("?,", len(ids)-1) + "?"
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+
+	byID := make(map[int64]*Memory, len(ids))
+
+	rows, err := s.db.Query(`
+		SELECT id, title, source, description, created_at, updated_at
+		FROM memories
+		WHERE id IN (`+placeholders+`)
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query memories: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var m Memory
+		var description sql.NullString
+		if err := rows.Scan(&m.ID, &m.Title, &m.Source, &description, &m.CreatedAt, &m.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan memory: %w", err)
+		}
+		m.Description = description.String
+		byID[m.ID] = &m
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate memories: %w", err)
+	}
+
+	if err := s.loadCommands(placeholders, args, byID); err != nil {
+		return nil, err
+	}
+	if err := s.loadTags(placeholders, args, byID); err != nil {
+		return nil, err
+	}
+
+	memories := make([]Memory, 0, len(byID))
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		if m, ok := byID[id]; ok && !seen[id] {
+			memories = append(memories, *m)
+			seen[id] = true
+		}
+	}
+	return memories, nil
+}
+
+func (s *Store) loadCommands(placeholders string, args []any, byID map[int64]*Memory) error {
+	rows, err := s.db.Query(`
+		SELECT id, memory_id, position, command, output, created_at
+		FROM commands
+		WHERE memory_id IN (`+placeholders+`)
+		ORDER BY memory_id, position
+	`, args...)
+	if err != nil {
+		return fmt.Errorf("query commands: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var c Command
+		if err := rows.Scan(&c.ID, &c.MemoryID, &c.Position, &c.Command, &c.Output, &c.CreatedAt); err != nil {
+			return fmt.Errorf("scan command: %w", err)
+		}
+		if m, ok := byID[c.MemoryID]; ok {
+			m.Commands = append(m.Commands, c)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate commands: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) loadTags(placeholders string, args []any, byID map[int64]*Memory) error {
+	rows, err := s.db.Query(`
+		SELECT mt.memory_id, t.name
+		FROM memory_tags mt
+		JOIN tags t ON t.id = mt.tag_id
+		WHERE mt.memory_id IN (`+placeholders+`)
+		ORDER BY mt.memory_id, t.name
+	`, args...)
+	if err != nil {
+		return fmt.Errorf("query tags: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var memoryID int64
+		var name string
+		if err := rows.Scan(&memoryID, &name); err != nil {
+			return fmt.Errorf("scan tag: %w", err)
+		}
+		if m, ok := byID[memoryID]; ok {
+			m.Tags = append(m.Tags, name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate tags: %w", err)
+	}
+	return nil
 }
