@@ -182,6 +182,71 @@ func (s *Store) SaveMemory(m *Memory) error {
 	return tx.Commit()
 }
 
+func (s *Store) DeleteMemory(id int64) error {
+	res, err := s.db.Exec("DELETE FROM memories WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("delete memory %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) ListMemories(tag string, limit int) ([]Memory, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	var query string
+	var args []any
+
+	if tag != "" {
+		query = `
+			SELECT m.id
+			FROM memories m
+			JOIN memory_tags mt ON mt.memory_id = m.id
+			JOIN tags t ON t.id = mt.tag_id
+			WHERE t.name = ?
+			ORDER BY m.created_at DESC, m.id DESC
+			LIMIT ?
+		`
+		args = []any{tag, limit}
+	} else {
+		query = `
+			SELECT id
+			FROM memories
+			ORDER BY created_at DESC, id DESC
+			LIMIT ?
+		`
+		args = []any{limit}
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query list memories: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan memory id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate memory ids: %w", err)
+	}
+
+	return s.GetMemoriesByIDs(ids)
+}
+
 func (s *Store) GetMemory(id int64) (*Memory, error) {
 	memories, err := s.GetMemoriesByIDs([]int64{id})
 	if err != nil {

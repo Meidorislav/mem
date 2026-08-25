@@ -224,3 +224,73 @@ func TestEmbeddingStatus(t *testing.T) {
 		t.Errorf("expected hash2, got %s", st.ContentHash)
 	}
 }
+
+func TestDeleteMemory(t *testing.T) {
+	store := newTestStore(t)
+	memID := saveTestMemory(t, store, "to delete", []string{"rm -rf /"}, []string{"dangerous"})
+
+	err := store.DeleteMemory(memID)
+	if err != nil {
+		t.Fatalf("DeleteMemory: %v", err)
+	}
+
+	_, err = store.GetMemory(memID)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound after deletion, got %v", err)
+	}
+
+	// Deleting again should return ErrNotFound
+	err = store.DeleteMemory(memID)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound when deleting non-existent ID, got %v", err)
+	}
+}
+
+func TestListMemories(t *testing.T) {
+	store := newTestStore(t)
+	id1 := saveTestMemory(t, store, "mem 1", []string{"cmd1"}, []string{"tagA"})
+	id2 := saveTestMemory(t, store, "mem 2", []string{"cmd2"}, []string{"tagB"})
+	id3 := saveTestMemory(t, store, "mem 3", []string{"cmd3"}, []string{"tagA", "tagB"})
+
+	// List all
+	all, err := store.ListMemories("", 10)
+	if err != nil {
+		t.Fatalf("ListMemories all: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("expected 3 memories, got %d", len(all))
+	}
+
+	// List filtered by tagA (should return id3 and id1 in reverse created order)
+	tagAResults, err := store.ListMemories("tagA", 10)
+	if err != nil {
+		t.Fatalf("ListMemories tagA: %v", err)
+	}
+	if len(tagAResults) != 2 {
+		t.Fatalf("expected 2 memories with tagA, got %d", len(tagAResults))
+	}
+	if tagAResults[0].ID != id3 || tagAResults[1].ID != id1 {
+		t.Errorf("expected [id3, id1], got [%d, %d]", tagAResults[0].ID, tagAResults[1].ID)
+	}
+
+	// List filtered by tagB (should return id3 and id2)
+	tagBResults, err := store.ListMemories("tagB", 10)
+	if err != nil {
+		t.Fatalf("ListMemories tagB: %v", err)
+	}
+	if len(tagBResults) != 2 {
+		t.Fatalf("expected 2 memories with tagB, got %d", len(tagBResults))
+	}
+	if tagBResults[0].ID != id3 || tagBResults[1].ID != id2 {
+		t.Errorf("expected [id3, id2], got [%d, %d]", tagBResults[0].ID, tagBResults[1].ID)
+	}
+
+	// List with limit
+	limited, err := store.ListMemories("", 1)
+	if err != nil {
+		t.Fatalf("ListMemories limited: %v", err)
+	}
+	if len(limited) != 1 || limited[0].ID != id3 {
+		t.Errorf("expected 1 memory with id3, got %+v", limited)
+	}
+}
