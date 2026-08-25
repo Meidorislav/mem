@@ -33,3 +33,6 @@ go.work.sum
 
 NOTES.md
 mem
+include/
+lib/
+RELEASE_NOTES.md

@@ -1,4 +1,4 @@
-# CLAUDE.md — mem
+# AGENTS.md — mem
 
 Local-first CLI "second brain" for developers. Semantic search over terminal commands, debugging sessions, and notes — fully private, powered by Ollama.
 

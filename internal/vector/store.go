@@ -27,7 +27,10 @@ func NewStore(dims int) (*Store, error) {
 		return nil, fmt.Errorf("getting home dir: %w", err)
 	}
 
-	dbPath := filepath.Join(home, ".mem", "vectors")
+	return NewStoreAt(filepath.Join(home, ".mem", "vectors"), dims)
+}
+
+func NewStoreAt(dbPath string, dims int) (*Store, error) {
 	db, err := lancedb.Connect(context.Background(), dbPath, nil)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to lancedb: %w", err)
@@ -81,13 +84,22 @@ func (s *Store) Search(ctx context.Context, vec []float32, limit int) ([]int64, 
 
 	ids := make([]int64, 0, len(results))
 	for _, row := range results {
-		id, ok := row["memory_id"].(int64)
-		if !ok {
-			continue
+		switch idVal := row["memory_id"].(type) {
+		case int64:
+			ids = append(ids, idVal)
+		case float64:
+			ids = append(ids, int64(idVal))
+		case int:
+			ids = append(ids, int64(idVal))
+		case int32:
+			ids = append(ids, int64(idVal))
 		}
-		ids = append(ids, id)
 	}
 	return ids, nil
+}
+
+func (s *Store) Delete(ctx context.Context, memoryID int64) error {
+	return s.table.Delete(ctx, fmt.Sprintf("memory_id = %d", memoryID))
 }
 
 func (s *Store) buildRecord(memoryID int64, vec []float32) (arrow.Record, error) {

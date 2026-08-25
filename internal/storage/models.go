@@ -34,3 +34,23 @@ type Tag struct {
 	ID   int64
 	Name string
 }
+
+type EmbeddingConfig struct {
+	ID         int64
+	ModelName  string
+	Version    *string
+	Dimensions int
+	IsActive   bool
+	CreatedAt  time.Time
+}
+
+type EmbeddingStatus struct {
+	ID                int64
+	MemoryID          int64
+	CommandID         *int64
+	EmbeddingConfigID int64
+	ChunkIndex        int
+	ContentHash       string
+	IndexedAt         *time.Time
+	NeedsReindex      bool
+}
