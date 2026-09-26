@@ -414,32 +414,50 @@ func (s *Store) GetOrCreateActiveEmbeddingConfig(modelName string, dims int) (*E
 	return &ec, nil
 }
 
+// UpsertEmbeddingStatus records that a chunk has been indexed. The update is
+// matched with IS rather than ON CONFLICT because SQLite treats NULLs as
+// distinct in UNIQUE constraints, so context chunks (command_id NULL) would
+// otherwise be inserted again on every reindex.
 func (s *Store) UpsertEmbeddingStatus(status *EmbeddingStatus) error {
-	res, err := s.db.Exec(`
-		INSERT INTO embedding_status (memory_id, command_id, embedding_config_id, chunk_index, content_hash, indexed_at, needs_reindex)
-		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, FALSE)
-		ON CONFLICT(memory_id, command_id, chunk_index, embedding_config_id) DO UPDATE SET
-			content_hash = excluded.content_hash,
-			indexed_at = CURRENT_TIMESTAMP,
-			needs_reindex = FALSE
-	`, status.MemoryID, status.CommandID, status.EmbeddingConfigID, status.ChunkIndex, status.ContentHash)
-	if err != nil {
-		return fmt.Errorf("upsert embedding status: %w", err)
-	}
-
-	id, err := res.LastInsertId()
+	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
-	if id > 0 {
-		status.ID = id
+	defer tx.Rollback()
+
+	var id int64
+	err = tx.QueryRow(`
+		UPDATE embedding_status
+		SET content_hash = ?, indexed_at = CURRENT_TIMESTAMP, needs_reindex = FALSE
+		WHERE memory_id = ? AND command_id IS ? AND chunk_index = ? AND embedding_config_id = ?
+		RETURNING id
+	`, status.ContentHash, status.MemoryID, status.CommandID, status.ChunkIndex, status.EmbeddingConfigID).Scan(&id)
+
+	if err == sql.ErrNoRows {
+		res, err := tx.Exec(`
+			INSERT INTO embedding_status (memory_id, command_id, embedding_config_id, chunk_index, content_hash, indexed_at, needs_reindex)
+			VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, FALSE)
+		`, status.MemoryID, status.CommandID, status.EmbeddingConfigID, status.ChunkIndex, status.ContentHash)
+		if err != nil {
+			return fmt.Errorf("insert embedding status: %w", err)
+		}
+		if id, err = res.LastInsertId(); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return fmt.Errorf("update embedding status: %w", err)
 	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	status.ID = id
 	return nil
 }
 
 func (s *Store) GetEmbeddingStatus(memoryID int64, commandID *int64, chunkIndex int, configID int64) (*EmbeddingStatus, error) {
 	var st EmbeddingStatus
-	
+
 	// handle nullable command_id for sqlite
 	var cmdQuery string
 	var args []any
@@ -464,4 +482,108 @@ func (s *Store) GetEmbeddingStatus(memoryID int64, commandID *int64, chunkIndex 
 		return nil, err
 	}
 	return &st, nil
+}
+
+// GetActiveEmbeddingConfig returns the most recently created active config,
+// or nil if no model has been configured yet.
+func (s *Store) GetActiveEmbeddingConfig() (*EmbeddingConfig, error) {
+	var ec EmbeddingConfig
+	err := s.db.QueryRow(`
+		SELECT id, model_name, version, dimensions, is_active, created_at
+		FROM embedding_configs
+		WHERE is_active = TRUE
+		ORDER BY id DESC
+		LIMIT 1
+	`).Scan(&ec.ID, &ec.ModelName, &ec.Version, &ec.Dimensions, &ec.IsActive, &ec.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query active embedding config: %w", err)
+	}
+	return &ec, nil
+}
+
+// ActivateEmbeddingConfig makes modelName the only active embedding model.
+// Vectors from different models are incompatible, so every embedding_status
+// row is flagged for reindexing.
+func (s *Store) ActivateEmbeddingConfig(modelName string, dims int) (*EmbeddingConfig, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("UPDATE embedding_configs SET is_active = FALSE"); err != nil {
+		return nil, fmt.Errorf("deactivate embedding configs: %w", err)
+	}
+
+	var ec EmbeddingConfig
+	err = tx.QueryRow(`
+		SELECT id, model_name, version, dimensions, created_at
+		FROM embedding_configs
+		WHERE model_name = ? AND dimensions = ?
+		ORDER BY id DESC
+		LIMIT 1
+	`, modelName, dims).Scan(&ec.ID, &ec.ModelName, &ec.Version, &ec.Dimensions, &ec.CreatedAt)
+
+	if err == sql.ErrNoRows {
+		res, err := tx.Exec(`
+			INSERT INTO embedding_configs (model_name, dimensions, is_active)
+			VALUES (?, ?, TRUE)
+		`, modelName, dims)
+		if err != nil {
+			return nil, fmt.Errorf("insert embedding config: %w", err)
+		}
+		if ec.ID, err = res.LastInsertId(); err != nil {
+			return nil, err
+		}
+		ec.ModelName = modelName
+		ec.Dimensions = dims
+		ec.CreatedAt = time.Now()
+	} else if err != nil {
+		return nil, fmt.Errorf("query embedding config: %w", err)
+	} else if _, err := tx.Exec("UPDATE embedding_configs SET is_active = TRUE WHERE id = ?", ec.ID); err != nil {
+		return nil, fmt.Errorf("activate embedding config: %w", err)
+	}
+	ec.IsActive = true
+
+	if _, err := tx.Exec("UPDATE embedding_status SET needs_reindex = TRUE"); err != nil {
+		return nil, fmt.Errorf("mark embeddings for reindex: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &ec, nil
+}
+
+// MarkAllForReindex flags every indexed chunk as stale.
+func (s *Store) MarkAllForReindex() error {
+	if _, err := s.db.Exec("UPDATE embedding_status SET needs_reindex = TRUE"); err != nil {
+		return fmt.Errorf("mark embeddings for reindex: %w", err)
+	}
+	return nil
+}
+
+// AllMemoryIDs returns the IDs of every stored memory, oldest first.
+func (s *Store) AllMemoryIDs() ([]int64, error) {
+	rows, err := s.db.Query("SELECT id FROM memories ORDER BY id")
+	if err != nil {
+		return nil, fmt.Errorf("query memory ids: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan memory id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate memory ids: %w", err)
+	}
+	return ids, nil
 }

@@ -294,3 +294,101 @@ func TestListMemories(t *testing.T) {
 		t.Errorf("expected 1 memory with id3, got %+v", limited)
 	}
 }
+
+func TestEmbeddingStatusNullCommandUpsert(t *testing.T) {
+	store := newTestStore(t)
+	memID := saveTestMemory(t, store, "context only", nil, nil)
+	ec, err := store.GetOrCreateActiveEmbeddingConfig("test-model", 10)
+	if err != nil {
+		t.Fatalf("GetOrCreateActiveEmbeddingConfig: %v", err)
+	}
+
+	for _, hash := range []string{"hash1", "hash2"} {
+		st := &EmbeddingStatus{MemoryID: memID, EmbeddingConfigID: ec.ID, ContentHash: hash}
+		if err := store.UpsertEmbeddingStatus(st); err != nil {
+			t.Fatalf("UpsertEmbeddingStatus(%s): %v", hash, err)
+		}
+	}
+
+	var count int
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM embedding_status WHERE memory_id = ?", memID).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("status rows = %d, want 1", count)
+	}
+
+	st, err := store.GetEmbeddingStatus(memID, nil, 0, ec.ID)
+	if err != nil || st == nil {
+		t.Fatalf("GetEmbeddingStatus: %v, %v", st, err)
+	}
+	if st.ContentHash != "hash2" {
+		t.Errorf("ContentHash = %q, want hash2", st.ContentHash)
+	}
+}
+
+func TestActivateEmbeddingConfig(t *testing.T) {
+	store := newTestStore(t)
+
+	active, err := store.GetActiveEmbeddingConfig()
+	if err != nil || active != nil {
+		t.Fatalf("GetActiveEmbeddingConfig on empty db = %v, %v; want nil, nil", active, err)
+	}
+
+	first, err := store.GetOrCreateActiveEmbeddingConfig("model-a", 768)
+	if err != nil {
+		t.Fatalf("GetOrCreateActiveEmbeddingConfig: %v", err)
+	}
+	memID := saveTestMemory(t, store, "indexed", nil, nil)
+	if err := store.UpsertEmbeddingStatus(&EmbeddingStatus{MemoryID: memID, EmbeddingConfigID: first.ID, ContentHash: "h"}); err != nil {
+		t.Fatalf("UpsertEmbeddingStatus: %v", err)
+	}
+
+	second, err := store.ActivateEmbeddingConfig("model-b", 1024)
+	if err != nil {
+		t.Fatalf("ActivateEmbeddingConfig: %v", err)
+	}
+	if second.ID == first.ID || !second.IsActive {
+		t.Errorf("second config = %+v, want new active config", second)
+	}
+
+	active, err = store.GetActiveEmbeddingConfig()
+	if err != nil || active == nil || active.ID != second.ID {
+		t.Fatalf("GetActiveEmbeddingConfig = %+v, %v; want model-b", active, err)
+	}
+
+	st, err := store.GetEmbeddingStatus(memID, nil, 0, first.ID)
+	if err != nil || st == nil {
+		t.Fatalf("GetEmbeddingStatus: %v, %v", st, err)
+	}
+	if !st.NeedsReindex {
+		t.Error("NeedsReindex = false after model switch, want true")
+	}
+
+	// Switching back reuses the existing config row.
+	again, err := store.ActivateEmbeddingConfig("model-a", 768)
+	if err != nil {
+		t.Fatalf("ActivateEmbeddingConfig (back): %v", err)
+	}
+	if again.ID != first.ID {
+		t.Errorf("reactivated ID = %d, want %d", again.ID, first.ID)
+	}
+	active, _ = store.GetActiveEmbeddingConfig()
+	if active.ID != first.ID {
+		t.Errorf("active ID = %d, want %d", active.ID, first.ID)
+	}
+}
+
+func TestAllMemoryIDs(t *testing.T) {
+	store := newTestStore(t)
+	id1 := saveTestMemory(t, store, "one", nil, nil)
+	id2 := saveTestMemory(t, store, "two", nil, nil)
+
+	ids, err := store.AllMemoryIDs()
+	if err != nil {
+		t.Fatalf("AllMemoryIDs: %v", err)
+	}
+	if len(ids) != 2 || ids[0] != id1 || ids[1] != id2 {
+		t.Errorf("ids = %v, want [%d %d]", ids, id1, id2)
+	}
+}
