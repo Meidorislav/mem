@@ -1,4 +1,4 @@
-.PHONY: all build test clean download-artifacts
+.PHONY: all build test lint clean download-artifacts
 
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
@@ -28,9 +28,10 @@ export CGO_LDFLAGS
 
 all: build
 
-# Fetch the prebuilt LanceDB static libraries and headers into lib/ and include/.
+# Fetch the prebuilt LanceDB static library for this platform and the headers
+# into lib/ and include/. The archive holds every platform (~450MB).
 download-artifacts:
-	curl -sSL --fail $(LANCEDB_ARCHIVE) | tar -xz -C $(CURDIR) lib include
+	curl -sSL --fail $(LANCEDB_ARCHIVE) | tar -xz -C $(CURDIR) lib/$(PLATFORM) include
 
 lib/$(PLATFORM)/liblancedb_go.a:
 	$(MAKE) download-artifacts
@@ -40,6 +41,11 @@ build: lib/$(PLATFORM)/liblancedb_go.a
 
 test: lib/$(PLATFORM)/liblancedb_go.a
 	go test -v ./...
+
+lint: lib/$(PLATFORM)/liblancedb_go.a
+	@unformatted=$$(gofmt -l cmd internal); \
+	if [ -n "$$unformatted" ]; then echo "gofmt needed:"; echo "$$unformatted"; exit 1; fi
+	go vet ./...
 
 clean:
 	rm -f mem
