@@ -8,7 +8,7 @@ import (
 )
 
 func TestFormatSearchResults_Empty(t *testing.T) {
-	out := formatSearchResults(nil)
+	out := formatSearchResults(nil, nil)
 	if out != "No matching memories found." {
 		t.Errorf("expected 'No matching memories found.', got %q", out)
 	}
@@ -26,7 +26,7 @@ func TestFormatSearchResults_SingleMemory(t *testing.T) {
 		},
 	}
 
-	out := formatSearchResults(memories)
+	out := formatSearchResults(memories, nil)
 	if !strings.Contains(out, "1. list files by size  [files, disk]") {
 		t.Errorf("expected title and tags in output, got %q", out)
 	}
@@ -54,11 +54,27 @@ func TestFormatSearchResults_MultipleMemories(t *testing.T) {
 		},
 	}
 
-	out := formatSearchResults(memories)
+	out := formatSearchResults(memories, nil)
 	if !strings.Contains(out, "1. first memory") {
 		t.Errorf("expected memory 1 in output, got %q", out)
 	}
 	if !strings.Contains(out, "2. second memory") {
 		t.Errorf("expected memory 2 in output, got %q", out)
+	}
+}
+
+func TestFormatSearchResults_ScoresAndMultiLine(t *testing.T) {
+	memories := []storage.Memory{{
+		ID:       7,
+		Title:    "loop",
+		Commands: []storage.Command{{Command: "for i in 1 2; do\n  echo $i\ndone"}},
+	}}
+
+	out := formatSearchResults(memories, map[int64]float64{7: 0.734})
+	if !strings.Contains(out, "1. loop  (0.73)") {
+		t.Errorf("expected score in output, got %q", out)
+	}
+	if !strings.Contains(out, "$ for i in 1 2; do\n       echo $i\n     done") {
+		t.Errorf("expected indented continuation lines, got %q", out)
 	}
 }

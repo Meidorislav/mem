@@ -52,6 +52,11 @@ docs/i18n/ru/     # Russian docs
 - LanceDB rows only carry `memory_id`, so re-indexing replaces *all* vectors of a memory (`indexer.go`); embed first, then delete + insert, so an Ollama failure keeps old vectors
 - `embedding_status` upserts match on `command_id IS ?` — SQLite treats NULLs as distinct in UNIQUE, so `ON CONFLICT` would duplicate context-chunk rows
 
+### Search scoring
+- Vectors are L2-normalized on insert and query, so LanceDB's L2 ranking equals cosine ranking. `vector.Search` returns `Hit{MemoryID, Score}` where `Score` is cosine similarity computed in Go from the returned embedding (correct even for vectors indexed before normalization)
+- `rankHits` (`commands/rank.go`) keeps one hit per memory (best chunk), drops scores below `--min-score` (default 0.4) and anything more than `scoreGap` (0.15) behind the best hit; `--min-score 0` disables both
+- `ask` warns on stderr when `CountUnindexedMemories` > 0
+
 ### Model switching
 When changing embedding models, a full reindex is required — set `needs_reindex = TRUE` on all `embedding_status` rows and re-encode everything. `embedding_configs` tracks which model produced which vectors; exactly one row is `is_active`.
 
@@ -95,5 +100,7 @@ ollama pull nomic-embed-text
 make build   # or: make download-artifacts, then make test
 ./mem --help
 ```
+
+`make lint` runs the gofmt check and `go vet`; CI (`.github/workflows/ci.yml`) runs `make lint` and `make test` on Linux and macOS for PRs and pushes to `main`, caching `lib/` and `include/`.
 
 Plain `go build`/`go test` fail at link time for packages that import `internal/vector` unless the CGO variables from the Makefile are exported.
