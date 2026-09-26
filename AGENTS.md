@@ -60,7 +60,7 @@ When changing embedding models, a full reindex is required — set `needs_reinde
 ### Watch sessions
 - `mem watch` starts `$SHELL` (bash or zsh) with a generated rc file that sources the user's config and appends each command to `~/.mem/sessions/<timestamp>.session`, NUL-terminated (multi-line safe); `MEM_SESSION` holds the path
 - bash records from `PROMPT_COMMAND` via `history 1`; zsh from a `preexec` hook. Both skip space-prefixed commands when the shell ignores them for history
-- `mem remember` inside the shell reads `MEM_SESSION` and truncates it after saving; outside it uses the newest session file and deletes it. `session.Clean` drops `mem` invocations, `exit`, blanks and consecutive duplicates
+- `mem remember` inside the shell reads `MEM_SESSION` and truncates it after saving; outside it uses the newest session file and deletes it. `session.Clean` first splits multi-line records into per-line commands with `mvdan.cc/sh` (zsh runs a pasted block as one line; loops, `\` continuations and heredocs stay whole), then drops `mem` invocations, `exit`, blanks and consecutive duplicates
 
 ## SQLite schema (current)
 
