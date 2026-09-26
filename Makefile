@@ -19,16 +19,26 @@ else ifeq ($(UNAME_S),Linux)
     CGO_LDFLAGS := $(CURDIR)/lib/$(PLATFORM)/liblancedb_go.a -lm -ldl -lpthread
 endif
 
+LANCEDB_VERSION := $(shell go list -m -f '{{.Version}}' github.com/lancedb/lancedb-go)
+LANCEDB_ARCHIVE := https://github.com/lancedb/lancedb-go/releases/download/$(LANCEDB_VERSION)/lancedb-go-native-binaries.tar.gz
+
 CGO_CFLAGS := -I$(CURDIR)/include
 export CGO_CFLAGS
 export CGO_LDFLAGS
 
 all: build
 
-build:
+# Fetch the prebuilt LanceDB static libraries and headers into lib/ and include/.
+download-artifacts:
+	curl -sSL --fail $(LANCEDB_ARCHIVE) | tar -xz -C $(CURDIR) lib include
+
+lib/$(PLATFORM)/liblancedb_go.a:
+	$(MAKE) download-artifacts
+
+build: lib/$(PLATFORM)/liblancedb_go.a
 	go build -o mem ./cmd/mem
 
-test:
+test: lib/$(PLATFORM)/liblancedb_go.a
 	go test -v ./...
 
 clean:

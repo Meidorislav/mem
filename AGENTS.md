@@ -20,11 +20,14 @@ Local-first CLI "second brain" for developers. Semantic search over terminal com
 ## Project structure
 
 ```
-cmd/mem/          # CLI entrypoints (cobra commands)
+cmd/mem/          # main package
 internal/
-  storage/        # SQLite layer (Store, SaveMemory, etc.)
-  embeddings/     # Ollama embedding client (not yet built)
-  vector/         # LanceDB integration (not yet built)
+  commands/       # cobra commands, chunker, indexer (save/ask/watch/remember/reindex/...)
+  storage/        # SQLite layer (Store, SaveMemory, embedding configs/status)
+  embeddings/     # Ollama embedding client
+  vector/         # LanceDB integration (vectors + memory_id only)
+  session/        # `mem watch` shell recorder (bash/zsh hooks, session files)
+  llm/            # Ollama generate client for `mem ask --answer`
 docs/i18n/ru/     # Russian docs
 ```
 
@@ -40,14 +43,24 @@ docs/i18n/ru/     # Russian docs
 - One embedding model = one LanceDB index (vectors from different models are incompatible)
 - Track indexing state in `embedding_status` table; use `content_hash` to detect stale chunks
 
-### Chunking strategy (to be implemented)
+### Chunking strategy
 - Each command is indexed as its own chunk
 - Prepend title + tags as context: `"<command> | note: <title> | tags: <tag1>, <tag2>"`
 - Keep chunks under ~400 tokens (well within nomic-embed-text's 2048 limit)
 - Store `chunk_index` in `embedding_status` for multi-chunk notes
+- A memory with a description (or no commands) also gets a context chunk with `command_id = NULL`
+- LanceDB rows only carry `memory_id`, so re-indexing replaces *all* vectors of a memory (`indexer.go`); embed first, then delete + insert, so an Ollama failure keeps old vectors
+- `embedding_status` upserts match on `command_id IS ?` — SQLite treats NULLs as distinct in UNIQUE, so `ON CONFLICT` would duplicate context-chunk rows
 
 ### Model switching
-When changing embedding models, a full reindex is required — set `needs_reindex = TRUE` on all `embedding_status` rows and re-encode everything. `embedding_configs` tracks which model produced which vectors.
+When changing embedding models, a full reindex is required — set `needs_reindex = TRUE` on all `embedding_status` rows and re-encode everything. `embedding_configs` tracks which model produced which vectors; exactly one row is `is_active`.
+
+`mem reindex --model <name>` probes the model's dimensions, calls `ActivateEmbeddingConfig` (deactivates others, flags all rows stale), drops and recreates the LanceDB table, then re-embeds. Rows are flagged before vectors are dropped, so an interrupted reindex resumes on the next run. Opening the vector store with the wrong dimensions returns `vector.ErrDimsMismatch`.
+
+### Watch sessions
+- `mem watch` starts `$SHELL` (bash or zsh) with a generated rc file that sources the user's config and appends each command to `~/.mem/sessions/<timestamp>.session`, NUL-terminated (multi-line safe); `MEM_SESSION` holds the path
+- bash records from `PROMPT_COMMAND` via `history 1`; zsh from a `preexec` hook. Both skip space-prefixed commands when the shell ignores them for history
+- `mem remember` inside the shell reads `MEM_SESSION` and truncates it after saving; outside it uses the newest session file and deletes it. `session.Clean` drops `mem` invocations, `exit`, blanks and consecutive duplicates
 
 ## SQLite schema (current)
 
@@ -69,18 +82,18 @@ Key constraints:
 
 ## What's not built yet
 
-- Ollama embedding client (`internal/embeddings/`)
-- LanceDB integration (`internal/vector/`)
-- `mem ask` semantic search pipeline
-- `mem watch` terminal session recorder
-- Chunking logic
-- Reindex workflow
+- Editing existing memories (`mem edit`); chunk hashes already support stale detection for it
+- Capturing command output in `mem watch` (`commands.output` column is unused)
+- Shells other than bash/zsh for `mem watch`
 
 ## Running locally
 
-Requires Ollama running with at least one embedding model pulled:
+Requires Ollama running with at least one embedding model pulled, and the LanceDB native libraries (cgo). The Makefile downloads them into `lib/` and `include/` (gitignored) and sets `CGO_CFLAGS`/`CGO_LDFLAGS`:
 
 ```bash
 ollama pull nomic-embed-text
-go run ./cmd/mem
+make build   # or: make download-artifacts, then make test
+./mem --help
 ```
+
+Plain `go build`/`go test` fail at link time for packages that import `internal/vector` unless the CGO variables from the Makefile are exported.

@@ -2,6 +2,7 @@ package vector_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -105,5 +106,50 @@ func TestVectorStore_Delete(t *testing.T) {
 	}
 	if len(results) != 0 {
 		t.Errorf("expected 0 results after delete, got %v", results)
+	}
+}
+
+func TestVectorStore_ReopenWithDifferentDims(t *testing.T) {
+	vecPath := filepath.Join(t.TempDir(), "vectors")
+
+	store, err := vector.NewStoreAt(vecPath, 3)
+	if err != nil {
+		t.Fatalf("NewStoreAt: %v", err)
+	}
+	store.Close()
+
+	if _, err := vector.NewStoreAt(vecPath, 4); !errors.Is(err, vector.ErrDimsMismatch) {
+		t.Fatalf("NewStoreAt with other dims: err = %v, want ErrDimsMismatch", err)
+	}
+}
+
+func TestVectorStore_Reset(t *testing.T) {
+	vecPath := filepath.Join(t.TempDir(), "vectors")
+	ctx := context.Background()
+
+	store, err := vector.NewStoreAt(vecPath, 3)
+	if err != nil {
+		t.Fatalf("NewStoreAt: %v", err)
+	}
+	if err := store.Insert(ctx, 1, []float32{1, 0, 0}); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	store.Close()
+
+	store, err = vector.ResetAt(vecPath, 4)
+	if err != nil {
+		t.Fatalf("ResetAt: %v", err)
+	}
+	defer store.Close()
+
+	results, err := store.Search(ctx, []float32{1, 0, 0, 0}, 5)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("results after reset = %v, want none", results)
+	}
+	if err := store.Insert(ctx, 2, []float32{0, 1, 0, 0}); err != nil {
+		t.Fatalf("Insert after reset: %v", err)
 	}
 }
