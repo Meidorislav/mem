@@ -587,3 +587,24 @@ func (s *Store) AllMemoryIDs() ([]int64, error) {
 	}
 	return ids, nil
 }
+
+// CountUnindexedMemories counts memories that have no up-to-date vectors for
+// the given embedding config (never indexed, or flagged needs_reindex).
+func (s *Store) CountUnindexedMemories(configID int64) (int, error) {
+	var n int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM memories m
+		WHERE NOT EXISTS (
+			SELECT 1 FROM embedding_status es
+			WHERE es.memory_id = m.id AND es.embedding_config_id = ? AND es.needs_reindex = FALSE
+		) OR EXISTS (
+			SELECT 1 FROM embedding_status es
+			WHERE es.memory_id = m.id AND es.embedding_config_id = ? AND es.needs_reindex = TRUE
+		)
+	`, configID, configID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count unindexed memories: %w", err)
+	}
+	return n, nil
+}

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/array"
@@ -133,12 +135,14 @@ func defaultPath() (string, error) {
 	return filepath.Join(home, ".mem", "vectors"), nil
 }
 
+// Insert stores vec for memoryID. Vectors are L2-normalized so LanceDB's
+// L2 ranking matches cosine similarity.
 func (s *Store) Insert(ctx context.Context, memoryID int64, vec []float32) error {
 	if len(vec) != s.dims {
 		return fmt.Errorf("vector length %d does not match store dims %d", len(vec), s.dims)
 	}
 
-	record, err := s.buildRecord(memoryID, vec)
+	record, err := s.buildRecord(memoryID, normalize(vec))
 	if err != nil {
 		return err
 	}
@@ -147,26 +151,105 @@ func (s *Store) Insert(ctx context.Context, memoryID int64, vec []float32) error
 	return s.table.Add(ctx, record, nil)
 }
 
-func (s *Store) Search(ctx context.Context, vec []float32, limit int) ([]int64, error) {
-	results, err := s.table.VectorSearch(ctx, "embedding", vec, limit)
+// Hit is one search result: a chunk of a memory and its cosine similarity
+// to the query (1 = identical direction, 0 = unrelated).
+type Hit struct {
+	MemoryID int64
+	Score    float64
+}
+
+// Search returns the nearest chunks to vec, best first. A memory can appear
+// once per indexed chunk.
+func (s *Store) Search(ctx context.Context, vec []float32, limit int) ([]Hit, error) {
+	query := normalize(vec)
+	results, err := s.table.VectorSearch(ctx, "embedding", query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
 
-	ids := make([]int64, 0, len(results))
+	hits := make([]Hit, 0, len(results))
 	for _, row := range results {
-		switch idVal := row["memory_id"].(type) {
-		case int64:
-			ids = append(ids, idVal)
-		case float64:
-			ids = append(ids, int64(idVal))
-		case int:
-			ids = append(ids, int64(idVal))
-		case int32:
-			ids = append(ids, int64(idVal))
+		id, ok := toInt64(row["memory_id"])
+		if !ok {
+			continue
 		}
+		// Score from the stored vector itself, so vectors indexed before
+		// normalization was introduced still get a correct cosine.
+		score, ok := cosine(query, row["embedding"])
+		if !ok {
+			d, _ := toFloat64(row["_distance"])
+			score = 1 - d/2 // squared L2 between unit vectors
+		}
+		hits = append(hits, Hit{MemoryID: id, Score: score})
 	}
-	return ids, nil
+	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
+	return hits, nil
+}
+
+func normalize(vec []float32) []float32 {
+	var sum float64
+	for _, v := range vec {
+		sum += float64(v) * float64(v)
+	}
+	if sum == 0 {
+		return vec
+	}
+	norm := math.Sqrt(sum)
+	out := make([]float32, len(vec))
+	for i, v := range vec {
+		out[i] = float32(float64(v) / norm)
+	}
+	return out
+}
+
+// cosine computes the cosine similarity between unit vector q and a stored
+// embedding as returned by LanceDB.
+func cosine(q []float32, stored any) (float64, bool) {
+	vals, ok := stored.([]any)
+	if !ok || len(vals) != len(q) {
+		return 0, false
+	}
+	var dot, norm float64
+	for i, v := range vals {
+		f, ok := toFloat64(v)
+		if !ok {
+			return 0, false
+		}
+		dot += float64(q[i]) * f
+		norm += f * f
+	}
+	if norm == 0 {
+		return 0, true
+	}
+	return dot / math.Sqrt(norm), true
+}
+
+func toFloat64(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	}
+	return 0, false
+}
+
+func toInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case float64:
+		return int64(n), true
+	case int:
+		return int64(n), true
+	case int32:
+		return int64(n), true
+	}
+	return 0, false
 }
 
 func (s *Store) Delete(ctx context.Context, memoryID int64) error {
