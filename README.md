@@ -66,6 +66,36 @@ mem ask "how did I fix the api-service crash?"
 
 ---
 
+## 📦 Installation
+
+Requirements: Go 1.26+, a C toolchain (LanceDB is linked via cgo), and [Ollama](https://ollama.com) running locally.
+
+```bash
+ollama pull nomic-embed-text   # embeddings (required)
+ollama pull llama3.2           # answers for `mem ask --answer` (optional)
+
+make build                     # downloads LanceDB native libs on first run
+./mem --help
+```
+
+Data lives in `~/.mem/` (`mem.db` for SQLite, `vectors/` for LanceDB, `sessions/` for `mem watch`).
+
+## 📖 Commands
+
+| Command | What it does |
+|---|---|
+| `mem save "title" -c "cmd" [-c ...] [-t tag] [-d "description"]` | Save commands/notes as a memory |
+| `mem ask "question" [-n 5] [--answer] [--llm llama3.2]` | Semantic search; `--answer` also asks a local LLM to summarize the results |
+| `mem watch [--shell bash\|zsh]` | Start a recorded subshell; every command is logged until `exit` |
+| `mem remember "title" [-t tag] [-d "..."] [-n N]` | Turn the recorded session (or its last N commands) into a memory. Works inside the watched shell too |
+| `mem list [-t tag] [-n 20]` | List recent memories |
+| `mem show <id>` / `mem delete <id>` | Inspect or remove a memory |
+| `mem reindex [--all] [--model name]` | Embed memories saved while Ollama was down, rebuild the index, or switch embedding model |
+
+Commands starting with a space are not recorded by `mem watch` if your shell ignores them for history (`HISTCONTROL=ignorespace` in bash, `setopt HIST_IGNORE_SPACE` in zsh).
+
+---
+
 ## 🏁 Quick Start
 
 ```bash
