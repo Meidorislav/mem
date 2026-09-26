@@ -48,10 +48,10 @@ func ChunkMemory(m *storage.Memory) []Chunk {
 	// 2. Command chunks
 	for _, cmd := range m.Commands {
 		text := fmt.Sprintf("%s%s%s%s", cmd.Command, noteStr, descStr, tagsStr)
-		
+
 		// Create a local copy of ID since we take pointer
 		cmdID := cmd.ID
-		
+
 		chunks = append(chunks, Chunk{
 			Text:       text,
 			Hash:       hashText(text),

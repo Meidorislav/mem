@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/meidori/mem/internal/embeddings"
+	"github.com/meidori/mem/internal/llm"
 	"github.com/meidori/mem/internal/storage"
 	"github.com/meidori/mem/internal/vector"
 	"github.com/spf13/cobra"
@@ -31,8 +32,9 @@ func Execute() {
 }
 
 var saveFlags struct {
-	commands []string
-	tags     []string
+	commands    []string
+	tags        []string
+	description string
 }
 
 var saveCmd = &cobra.Command{
@@ -46,29 +48,12 @@ var saveCmd = &cobra.Command{
 		}
 		defer store.Close()
 
-		// Initialize Embeddings and Vector DB
-		const defaultModel = "nomic-embed-text"
-		const defaultDims = 768
-
-		embClient := embeddings.NewClient(defaultModel)
-		
-		vecStore, err := vector.NewStore(defaultDims)
-		if err != nil {
-			return fmt.Errorf("opening vector store: %w", err)
-		}
-		defer vecStore.Close()
-
-		// Get or create embedding config
-		embConfig, err := store.GetOrCreateActiveEmbeddingConfig(defaultModel, defaultDims)
-		if err != nil {
-			return fmt.Errorf("getting active embedding config: %w", err)
-		}
-
 		title := strings.Join(args, " ")
 		m := &storage.Memory{
-			Title:  title,
-			Source: storage.SourceSave,
-			Tags:   saveFlags.tags,
+			Title:       title,
+			Source:      storage.SourceSave,
+			Description: saveFlags.description,
+			Tags:        saveFlags.tags,
 		}
 		for _, c := range saveFlags.commands {
 			m.Commands = append(m.Commands, storage.Command{Command: c})
@@ -78,49 +63,25 @@ var saveCmd = &cobra.Command{
 			return fmt.Errorf("saving memory: %w", err)
 		}
 
-		// Process chunks
-		chunks := ChunkMemory(m)
-		for _, chunk := range chunks {
-			// Check if already indexed with this hash
-			status, err := store.GetEmbeddingStatus(m.ID, chunk.CommandID, chunk.ChunkIndex, embConfig.ID)
-			if err != nil {
-				return fmt.Errorf("getting embedding status: %w", err)
-			}
-			if status != nil && status.ContentHash == chunk.Hash && !status.NeedsReindex {
-				continue // already indexed
-			}
-
-			// Generate embedding
-			vec, err := embClient.Embed(chunk.Text)
-			if err != nil {
-				return fmt.Errorf("generating embedding: %w", err)
-			}
-
-			// Insert into LanceDB
-			if err := vecStore.Insert(context.Background(), m.ID, vec); err != nil {
-				return fmt.Errorf("inserting into vector store: %w", err)
-			}
-
-			// Update SQLite status
-			newStatus := &storage.EmbeddingStatus{
-				MemoryID:          m.ID,
-				CommandID:         chunk.CommandID,
-				EmbeddingConfigID: embConfig.ID,
-				ChunkIndex:        chunk.ChunkIndex,
-				ContentHash:       chunk.Hash,
-			}
-			if err := store.UpsertEmbeddingStatus(newStatus); err != nil {
-				return fmt.Errorf("upserting embedding status: %w", err)
-			}
-		}
-
-		fmt.Printf("Saved: %s\n", title)
+		fmt.Printf("Saved #%d: %s\n", m.ID, title)
+		warnIfNotIndexed(store, m)
 		return nil
 	},
 }
 
+// warnIfNotIndexed indexes m and, on failure, tells the user how to recover.
+// The memory itself is already in SQLite, so a missing Ollama is not fatal.
+func warnIfNotIndexed(store *storage.Store, m *storage.Memory) {
+	if err := indexNewMemory(store, m); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: memory #%d is not searchable yet: %v\n", m.ID, err)
+		fmt.Fprintln(os.Stderr, "Run `mem reindex` once Ollama is available.")
+	}
+}
+
 var askFlags struct {
-	limit int
+	limit  int
+	answer bool
+	llm    string
 }
 
 var askCmd = &cobra.Command{
@@ -134,22 +95,22 @@ var askCmd = &cobra.Command{
 		}
 		defer store.Close()
 
-		const defaultModel = "nomic-embed-text"
-		const defaultDims = 768
-
-		embClient := embeddings.NewClient(defaultModel)
-
-		vecStore, err := vector.NewStore(defaultDims)
+		cfg, err := activeConfig(store)
 		if err != nil {
-			return fmt.Errorf("opening vector store: %w", err)
+			return err
+		}
+
+		vecStore, err := openVectors(cfg)
+		if err != nil {
+			return err
 		}
 		defer vecStore.Close()
 
 		question := strings.Join(args, " ")
 
-		queryVec, err := embClient.Embed(question)
+		queryVec, err := embeddings.NewClient(cfg.ModelName).Embed(question)
 		if err != nil {
-			return fmt.Errorf("generating query embedding (ensure Ollama is running with '%s'): %w", defaultModel, err)
+			return fmt.Errorf("generating query embedding (ensure Ollama is running with '%s'): %w", cfg.ModelName, err)
 		}
 
 		limit := askFlags.limit
@@ -157,6 +118,8 @@ var askCmd = &cobra.Command{
 			limit = 5
 		}
 
+		// Multi-chunk memories return one hit per chunk, so over-fetch
+		// before deduplicating by memory ID.
 		candidateLimit := limit * 3
 		if candidateLimit < 10 {
 			candidateLimit = 10
@@ -165,11 +128,6 @@ var askCmd = &cobra.Command{
 		memoryIDs, err := vecStore.Search(context.Background(), queryVec, candidateLimit)
 		if err != nil {
 			return fmt.Errorf("searching vector store: %w", err)
-		}
-
-		if len(memoryIDs) == 0 {
-			fmt.Println("No matching memories found.")
-			return nil
 		}
 
 		memories, err := store.GetMemoriesByIDs(memoryIDs)
@@ -184,6 +142,14 @@ var askCmd = &cobra.Command{
 
 		if len(memories) > limit {
 			memories = memories[:limit]
+		}
+
+		if askFlags.answer {
+			prompt := llm.BuildPrompt(question, memories)
+			if err := llm.NewClient(askFlags.llm).Generate(prompt, os.Stdout); err != nil {
+				return fmt.Errorf("generating answer (ensure Ollama is running with '%s'): %w", askFlags.llm, err)
+			}
+			fmt.Print("\n\nSources:\n")
 		}
 
 		fmt.Println(formatSearchResults(memories))
@@ -285,11 +251,13 @@ var deleteCmd = &cobra.Command{
 			return fmt.Errorf("deleting memory: %w", err)
 		}
 
-		const defaultDims = 768
-		vecStore, err := vector.NewStore(defaultDims)
-		if err == nil {
-			defer vecStore.Close()
-			_ = vecStore.Delete(context.Background(), id)
+		// SQLite is the source of truth; a leftover vector is harmless since
+		// search results are joined back to SQLite and unknown IDs skipped.
+		if cfg, err := store.GetActiveEmbeddingConfig(); err == nil && cfg != nil {
+			if vecStore, err := vector.NewStore(cfg.Dimensions); err == nil {
+				defer vecStore.Close()
+				_ = vecStore.Delete(context.Background(), id)
+			}
 		}
 
 		fmt.Printf("Deleted memory #%d\n", id)
@@ -326,28 +294,14 @@ func formatSearchResults(memories []storage.Memory) string {
 	return sb.String()
 }
 
-var watchCmd = &cobra.Command{
-	Use:   "watch",
-	Short: "Record terminal session",
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Watching terminal...")
-	},
-}
-
-var rememberCmd = &cobra.Command{
-	Use:   "remember [description]",
-	Short: "Transform terminal history into a memory",
-	Args:  cobra.MinimumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("Remembering session: %s\n", args[0])
-	},
-}
-
 func init() {
 	saveCmd.Flags().StringArrayVarP(&saveFlags.commands, "command", "c", nil, "shell command to attach")
 	saveCmd.Flags().StringArrayVarP(&saveFlags.tags, "tag", "t", nil, "tag to assign")
+	saveCmd.Flags().StringVarP(&saveFlags.description, "description", "d", "", "longer description of the memory")
 
 	askCmd.Flags().IntVarP(&askFlags.limit, "limit", "n", 5, "maximum number of results to return")
+	askCmd.Flags().BoolVarP(&askFlags.answer, "answer", "a", false, "synthesize an answer from the results with a local LLM")
+	askCmd.Flags().StringVar(&askFlags.llm, "llm", "llama3.2", "Ollama model used by --answer")
 
 	listCmd.Flags().StringVarP(&listFlags.tag, "tag", "t", "", "filter by tag")
 	listCmd.Flags().IntVarP(&listFlags.limit, "limit", "n", 20, "maximum number of items to list")
@@ -359,4 +313,5 @@ func init() {
 	rootCmd.AddCommand(deleteCmd)
 	rootCmd.AddCommand(watchCmd)
 	rootCmd.AddCommand(rememberCmd)
+	rootCmd.AddCommand(reindexCmd)
 }

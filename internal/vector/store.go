@@ -2,6 +2,7 @@ package vector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,8 +10,8 @@ import (
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/array"
 	"github.com/apache/arrow/go/v17/arrow/memory"
-	lancedb "github.com/lancedb/lancedb-go/pkg/lancedb"
 	"github.com/lancedb/lancedb-go/pkg/contracts"
+	lancedb "github.com/lancedb/lancedb-go/pkg/lancedb"
 )
 
 const tableName = "embeddings"
@@ -22,12 +23,11 @@ type Store struct {
 }
 
 func NewStore(dims int) (*Store, error) {
-	home, err := os.UserHomeDir()
+	path, err := defaultPath()
 	if err != nil {
-		return nil, fmt.Errorf("getting home dir: %w", err)
+		return nil, err
 	}
-
-	return NewStoreAt(filepath.Join(home, ".mem", "vectors"), dims)
+	return NewStoreAt(path, dims)
 }
 
 func NewStoreAt(dbPath string, dims int) (*Store, error) {
@@ -54,12 +54,83 @@ func NewStoreAt(dbPath string, dims int) (*Store, error) {
 		}
 	}
 
-	return &Store{db: db, table: table, dims: dims}, nil
+	s := &Store{db: db, table: table, dims: dims}
+	if err := s.checkDims(context.Background()); err != nil {
+		s.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// ErrDimsMismatch means the on-disk index was built by a model with a
+// different vector size; it has to be rebuilt with Reset.
+var ErrDimsMismatch = errors.New("vector index dimensions mismatch")
+
+func (s *Store) checkDims(ctx context.Context) error {
+	schema, err := s.table.Schema(ctx)
+	if err != nil {
+		return fmt.Errorf("reading table schema: %w", err)
+	}
+	fields, ok := schema.FieldsByName("embedding")
+	if !ok || len(fields) == 0 {
+		return fmt.Errorf("table %s has no embedding column", tableName)
+	}
+	list, ok := fields[0].Type.(*arrow.FixedSizeListType)
+	if !ok {
+		return fmt.Errorf("unexpected embedding column type %s", fields[0].Type)
+	}
+	if int(list.Len()) != s.dims {
+		return fmt.Errorf("%w: index has %d, model has %d", ErrDimsMismatch, list.Len(), s.dims)
+	}
+	return nil
 }
 
 func (s *Store) Close() error {
-	s.table.Close()
+	if s.table != nil {
+		s.table.Close()
+	}
 	return s.db.Close()
+}
+
+// ResetAt drops all vectors and recreates the table for dims. Used when the
+// embedding model changes, since vectors from different models are incompatible.
+func ResetAt(dbPath string, dims int) (*Store, error) {
+	db, err := lancedb.Connect(context.Background(), dbPath, nil)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to lancedb: %w", err)
+	}
+	names, err := db.TableNames(context.Background())
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("listing tables: %w", err)
+	}
+	for _, name := range names {
+		if name == tableName {
+			if err := db.DropTable(context.Background(), tableName); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("dropping table: %w", err)
+			}
+		}
+	}
+	db.Close()
+	return NewStoreAt(dbPath, dims)
+}
+
+// Reset is ResetAt for the default location (~/.mem/vectors).
+func Reset(dims int) (*Store, error) {
+	path, err := defaultPath()
+	if err != nil {
+		return nil, err
+	}
+	return ResetAt(path, dims)
+}
+
+func defaultPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("getting home dir: %w", err)
+	}
+	return filepath.Join(home, ".mem", "vectors"), nil
 }
 
 func (s *Store) Insert(ctx context.Context, memoryID int64, vec []float32) error {
