@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // EnvVar holds the session file path inside a watched shell.
@@ -82,20 +84,71 @@ func Read(path string) ([]string, error) {
 }
 
 // Clean drops noise from recorded command lines: blanks, mem's own
-// invocations, shell exits and consecutive duplicates.
+// invocations, shell exits and consecutive duplicates. Multi-line records
+// (e.g. a pasted block that zsh runs as one line) are split into their
+// separate commands first.
 func Clean(cmds []string) []string {
 	var out []string
-	for _, c := range cmds {
-		c = strings.TrimSpace(c)
-		if c == "" || isNoise(c) {
-			continue
+	for _, rec := range cmds {
+		for _, c := range splitLines(rec) {
+			c = strings.TrimSpace(c)
+			if c == "" || isNoise(c) {
+				continue
+			}
+			if len(out) > 0 && out[len(out)-1] == c {
+				continue
+			}
+			out = append(out, c)
 		}
-		if len(out) > 0 && out[len(out)-1] == c {
-			continue
-		}
-		out = append(out, c)
 	}
 	return out
+}
+
+// splitLines splits a multi-line record into the commands written on
+// separate lines, keeping multi-line constructs (loops, pipelines continued
+// with \, heredocs) intact. Commands sharing a line stay together. Records
+// that do not parse as shell are returned unchanged.
+func splitLines(rec string) []string {
+	if !strings.Contains(rec, "\n") {
+		return []string{rec}
+	}
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(rec), "")
+	if err != nil || len(file.Stmts) == 0 {
+		return []string{rec}
+	}
+
+	// Group statements by the line they start on; statements sharing a line
+	// stay one command. A group ends at its last statement, or at the end of
+	// a heredoc body, which the statement's own range does not cover.
+	type span struct{ start, end, line uint }
+	var groups []span
+	for _, st := range file.Stmts {
+		end := stmtEnd(st)
+		if n := len(groups); n > 0 && st.Pos().Line() == groups[n-1].line {
+			groups[n-1].end = max(groups[n-1].end, end)
+			groups[n-1].line = st.End().Line()
+			continue
+		}
+		groups = append(groups, span{st.Pos().Offset(), end, st.End().Line()})
+	}
+
+	out := make([]string, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, rec[g.start:min(g.end, uint(len(rec)))])
+	}
+	return out
+}
+
+// stmtEnd returns the offset just past st, including any heredoc bodies.
+func stmtEnd(st *syntax.Stmt) uint {
+	end := st.End().Offset()
+	syntax.Walk(st, func(node syntax.Node) bool {
+		if r, ok := node.(*syntax.Redirect); ok && r.Hdoc != nil {
+			end = max(end, r.Hdoc.End().Offset())
+		}
+		return true
+	})
+	return end
 }
 
 func isNoise(cmd string) bool {

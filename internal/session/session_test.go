@@ -105,3 +105,36 @@ func TestNewShellBash(t *testing.T) {
 		t.Errorf("shell env lacks %s", EnvVar)
 	}
 }
+
+func TestCleanSplitsPastedBlock(t *testing.T) {
+	// zsh runs a pasted block as a single line, so preexec sees all of it.
+	in := []string{"ls -la\ndu -sh * | sort -h\n./mem remember \"тест\"\nexit"}
+	want := []string{"ls -la", "du -sh * | sort -h"}
+	if got := Clean(in); !reflect.DeepEqual(got, want) {
+		t.Errorf("Clean = %q, want %q", got, want)
+	}
+}
+
+func TestCleanKeepsMultiLineConstructs(t *testing.T) {
+	in := []string{
+		"for i in 1 2; do\n  echo $i\ndone",
+		"docker run \\\n  --rm alpine",
+		"cat <<EOF > conf\na=1\nEOF",
+		"cd /tmp; ls\npwd",
+		"make build\n# then run it\n./bin/app",
+		"if [ -f x ]; then\n  echo 'unterminated\n", // does not parse: kept as is
+	}
+	want := []string{
+		"for i in 1 2; do\n  echo $i\ndone",
+		"docker run \\\n  --rm alpine",
+		"cat <<EOF > conf\na=1\nEOF",
+		"cd /tmp; ls",
+		"pwd",
+		"make build",
+		"./bin/app",
+		"if [ -f x ]; then\n  echo 'unterminated",
+	}
+	if got := Clean(in); !reflect.DeepEqual(got, want) {
+		t.Errorf("Clean =\n%q\nwant\n%q", got, want)
+	}
+}

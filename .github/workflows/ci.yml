@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: LanceDB version
+        id: lancedb
+        run: echo "version=$(go list -m -f '{{.Version}}' github.com/lancedb/lancedb-go)" >> "$GITHUB_OUTPUT"
+
+      # The release archive is ~450MB, so keep the extracted libs between runs.
+      - name: Cache LanceDB native libs
+        uses: actions/cache@v4
+        with:
+          path: |
+            lib
+            include
+          key: lancedb-${{ runner.os }}-${{ runner.arch }}-${{ steps.lancedb.outputs.version }}
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test

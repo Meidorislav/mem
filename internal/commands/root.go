@@ -79,9 +79,10 @@ func warnIfNotIndexed(store *storage.Store, m *storage.Memory) {
 }
 
 var askFlags struct {
-	limit  int
-	answer bool
-	llm    string
+	limit    int
+	minScore float64
+	answer   bool
+	llm      string
 }
 
 var askCmd = &cobra.Command{
@@ -125,12 +126,33 @@ var askCmd = &cobra.Command{
 			candidateLimit = 10
 		}
 
-		memoryIDs, err := vecStore.Search(context.Background(), queryVec, candidateLimit)
+		hits, err := vecStore.Search(context.Background(), queryVec, candidateLimit)
 		if err != nil {
 			return fmt.Errorf("searching vector store: %w", err)
 		}
 
-		memories, err := store.GetMemoriesByIDs(memoryIDs)
+		if n, err := store.CountUnindexedMemories(cfg.ID); err == nil && n > 0 {
+			fmt.Fprintf(os.Stderr, "Note: %d %s not indexed yet; run `mem reindex` to include them.\n", n, plural(n, "memory is", "memories are"))
+		}
+
+		ranked := rankHits(hits, askFlags.minScore, limit)
+		if len(ranked) == 0 {
+			if len(hits) == 0 {
+				fmt.Println("No matching memories found.")
+			} else {
+				fmt.Printf("No memories scored above %.2f (best: %.2f). Try a lower --min-score.\n", askFlags.minScore, hits[0].Score)
+			}
+			return nil
+		}
+
+		ids := make([]int64, len(ranked))
+		scores := make(map[int64]float64, len(ranked))
+		for i, h := range ranked {
+			ids[i] = h.MemoryID
+			scores[h.MemoryID] = h.Score
+		}
+
+		memories, err := store.GetMemoriesByIDs(ids)
 		if err != nil {
 			return fmt.Errorf("retrieving memories: %w", err)
 		}
@@ -138,10 +160,6 @@ var askCmd = &cobra.Command{
 		if len(memories) == 0 {
 			fmt.Println("No matching memories found.")
 			return nil
-		}
-
-		if len(memories) > limit {
-			memories = memories[:limit]
 		}
 
 		if askFlags.answer {
@@ -152,7 +170,7 @@ var askCmd = &cobra.Command{
 			fmt.Print("\n\nSources:\n")
 		}
 
-		fmt.Println(formatSearchResults(memories))
+		fmt.Println(formatSearchResults(memories, scores))
 		return nil
 	},
 }
@@ -183,7 +201,7 @@ var listCmd = &cobra.Command{
 			return nil
 		}
 
-		fmt.Println(formatSearchResults(memories))
+		fmt.Println(formatSearchResults(memories, nil))
 		return nil
 	},
 }
@@ -265,7 +283,16 @@ var deleteCmd = &cobra.Command{
 	},
 }
 
-func formatSearchResults(memories []storage.Memory) string {
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// formatSearchResults renders memories as a numbered list. scores, when
+// non-nil, adds each memory's similarity to the query.
+func formatSearchResults(memories []storage.Memory, scores map[int64]float64) string {
 	if len(memories) == 0 {
 		return "No matching memories found."
 	}
@@ -280,6 +307,9 @@ func formatSearchResults(memories []storage.Memory) string {
 		if len(m.Tags) > 0 {
 			sb.WriteString(fmt.Sprintf("  [%s]", strings.Join(m.Tags, ", ")))
 		}
+		if score, ok := scores[m.ID]; ok {
+			sb.WriteString(fmt.Sprintf("  (%.2f)", score))
+		}
 
 		if m.Description != "" {
 			sb.WriteString("\n   ")
@@ -288,7 +318,8 @@ func formatSearchResults(memories []storage.Memory) string {
 
 		for _, cmd := range m.Commands {
 			sb.WriteString("\n   $ ")
-			sb.WriteString(cmd.Command)
+			// Keep continuation lines of multi-line commands under the "$".
+			sb.WriteString(strings.ReplaceAll(cmd.Command, "\n", "\n     "))
 		}
 	}
 	return sb.String()
@@ -300,6 +331,7 @@ func init() {
 	saveCmd.Flags().StringVarP(&saveFlags.description, "description", "d", "", "longer description of the memory")
 
 	askCmd.Flags().IntVarP(&askFlags.limit, "limit", "n", 5, "maximum number of results to return")
+	askCmd.Flags().Float64Var(&askFlags.minScore, "min-score", defaultMinScore, "hide results with a lower similarity (0-1); 0 shows everything")
 	askCmd.Flags().BoolVarP(&askFlags.answer, "answer", "a", false, "synthesize an answer from the results with a local LLM")
 	askCmd.Flags().StringVar(&askFlags.llm, "llm", "llama3.2", "Ollama model used by --answer")
 
