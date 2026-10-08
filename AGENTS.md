@@ -72,6 +72,11 @@ docs/i18n/ru/     # Russian docs
 - `PRAGMA user_version` holds `ftsVersion`; when it is lower, `syncFTS` rebuilds the whole index on open. Bump `ftsVersion` whenever `ftsText` changes
 - `fuse` (`commands/rank.go`) merges `rankHits` output with keyword hits by reciprocal rank fusion (k = 60): memories found by both rank first, and keyword hits are shown even below `--min-score`. If embedding the query fails, `ask` falls back to keyword results with a warning
 
+### Using results (`ask --copy` / `--run`)
+- `commands/pick.go`: both act on the top result. `chooseCommands` takes the only command, or prompts for a number / `a` (all) when there are several; without a terminal on stdin (checked with `golang.org/x/term`, since `/dev/null` is a char device too) `--copy` takes all of them
+- `--copy` pipes to the first clipboard tool found (`pbcopy`, `wl-copy`, `xclip`, `xsel`, `clip.exe`)
+- `--run` always asks y/N first and refuses without a terminal; commands run through `$SHELL -c` in the current directory, one by one, stopping at the first non-zero exit. Never add a way to skip the confirmation: memories hold things like `rm -rf`
+
 ### Editing and duplicates
 - `UpdateMemory` replaces title, description, commands and tags in one transaction (commands get new IDs), rewrites the `memory_fts` row and deletes the memory's `embedding_status` rows, so the following `indexNewMemory` re-embeds it; other memories are untouched
 - `mem edit` without flags round-trips the memory through `$VISUAL`/`$EDITOR` (`formatForEdit` / `parseEdit`): `key: value` header, then commands starting with `$ ` with continuation lines indented by two spaces
