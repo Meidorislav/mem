@@ -70,7 +70,7 @@ func TestFormatSearchResults_ScoresAndMultiLine(t *testing.T) {
 		Commands: []storage.Command{{Command: "for i in 1 2; do\n  echo $i\ndone"}},
 	}}
 
-	out := formatSearchResults(memories, map[int64]float64{7: 0.734})
+	out := formatSearchResults(memories, map[int64]string{7: "0.73"})
 	if !strings.Contains(out, "1. loop  (0.73)") {
 		t.Errorf("expected score in output, got %q", out)
 	}

@@ -60,6 +60,11 @@ docs/i18n/ru/     # Russian docs
 - `rankHits` (`commands/rank.go`) keeps one hit per memory (best chunk), drops scores below `--min-score` (default 0.4) and anything more than `scoreGap` (0.15) behind the best hit; `--min-score 0` disables both
 - `ask` warns on stderr when `CountUnindexedMemories` > 0
 
+### Keyword search (hybrid)
+- `memory_fts` (SQLite FTS5, `unicode61 remove_diacritics 2`, rowid = memory id) indexes title, description, tags and commands. `SaveMemory` inserts the row in its transaction; the `memories_fts_delete` trigger removes it; `NewStoreAt` backfills missing rows (`syncFTS`). Anything that edits a memory (a future `mem edit`) must rewrite its `memory_fts` row
+- `ftsQuery` turns the question into quoted prefix terms OR-ed together (`"nginx"* OR "502"*`), dropping en/ru stop words, so user text can't inject FTS syntax; results are ranked by `bm25` with title/tags/commands weighted above description
+- `fuse` (`commands/rank.go`) merges `rankHits` output with keyword hits by reciprocal rank fusion (k = 60): memories found by both rank first, and keyword hits are shown even below `--min-score`. If embedding the query fails, `ask` falls back to keyword results with a warning
+
 ### Model switching
 When changing embedding models, a full reindex is required — set `needs_reindex = TRUE` on all `embedding_status` rows and re-encode everything. `embedding_configs` tracks which model produced which vectors; exactly one row is `is_active`.
 
