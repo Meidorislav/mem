@@ -74,8 +74,10 @@ mem ask "как я фиксил падение api-сервиса?"
 ollama pull bge-m3             # эмбеддинги, многоязычные (обязательно)
 ollama pull llama3.2           # ответы для `mem ask --answer` (опционально)
 
-make build                     # при первом запуске скачает нативные библиотеки LanceDB
-./mem --help
+make install                   # соберёт и положит `mem` в $GOPATH/bin (при первом запуске скачает библиотеки LanceDB)
+mem --help
+
+make install BINDIR=/usr/local/bin   # или в другую папку; `make build` просто собирает ./mem
 ```
 
 Данные хранятся в `~/.mem/` (`mem.db` — SQLite, `vectors/` — LanceDB, `sessions/` — записи `mem watch`); переменная `MEM_HOME` переносит их в другую папку, например для черновой базы.

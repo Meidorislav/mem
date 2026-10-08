@@ -74,8 +74,10 @@ Requirements: Go 1.26+, a C toolchain (LanceDB is linked via cgo), and [Ollama](
 ollama pull bge-m3             # embeddings, multilingual (required)
 ollama pull llama3.2           # answers for `mem ask --answer` (optional)
 
-make build                     # downloads LanceDB native libs on first run
-./mem --help
+make install                   # builds and puts `mem` into $GOPATH/bin (downloads LanceDB libs on first run)
+mem --help
+
+make install BINDIR=/usr/local/bin   # or install somewhere else; `make build` just builds ./mem
 ```
 
 Data lives in `~/.mem/` (`mem.db` for SQLite, `vectors/` for LanceDB, `sessions/` for `mem watch`); set `MEM_HOME` to use another directory, e.g. a scratch database.
