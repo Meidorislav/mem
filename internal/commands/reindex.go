@@ -45,7 +45,7 @@ Ollama was down. Safe to interrupt and re-run: finished memories are skipped.
 			emb := embeddings.NewClient(model)
 			probe, err := emb.Embed("dimension probe")
 			if err != nil {
-				return fmt.Errorf("probing model %q (did you `ollama pull %s`?): %w", model, model, err)
+				return fmt.Errorf("probing model %q: %w", model, err)
 			}
 			if len(probe) == 0 {
 				return fmt.Errorf("model %q returned an empty embedding", model)

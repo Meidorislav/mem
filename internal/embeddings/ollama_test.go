@@ -89,3 +89,16 @@ func TestTaskPrefixes(t *testing.T) {
 		}
 	}
 }
+
+func TestMinScore(t *testing.T) {
+	for model, want := range map[string]float64{
+		"bge-m3":           0.42,
+		"bge-m3:latest":    0.42,
+		"nomic-embed-text": 0.4,
+		"unknown-model":    0.4,
+	} {
+		if got := embeddings.MinScore(model); got != want {
+			t.Errorf("MinScore(%q) = %v, want %v", model, got, want)
+		}
+	}
+}
