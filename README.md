@@ -78,7 +78,7 @@ make build                     # downloads LanceDB native libs on first run
 ./mem --help
 ```
 
-Data lives in `~/.mem/` (`mem.db` for SQLite, `vectors/` for LanceDB, `sessions/` for `mem watch`).
+Data lives in `~/.mem/` (`mem.db` for SQLite, `vectors/` for LanceDB, `sessions/` for `mem watch`); set `MEM_HOME` to use another directory, e.g. a scratch database.
 
 The default embedding model is `bge-m3`, which handles English and Russian in one index. English-only models such as `nomic-embed-text` work for English notes but score non-English questions close to noise; switch with `mem reindex --model <name>`.
 

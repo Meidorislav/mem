@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/meidori/mem/internal/paths"
 	_ "modernc.org/sqlite"
 )
 
@@ -109,12 +110,10 @@ type Store struct {
 }
 
 func NewStore() (*Store, error) {
-	home, err := os.UserHomeDir()
+	appDir, err := paths.AppDir()
 	if err != nil {
-		return nil, fmt.Errorf("getting home dir: %w", err)
+		return nil, err
 	}
-
-	appDir := filepath.Join(home, ".mem")
 	if err := os.MkdirAll(appDir, 0755); err != nil {
 		return nil, fmt.Errorf("creating app dir: %w", err)
 	}
