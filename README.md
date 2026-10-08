@@ -89,7 +89,7 @@ After upgrading, `mem ask` may report memories that are not indexed with the cur
 | Command | What it does |
 |---|---|
 | `mem save "title" -c "cmd" [-c ...] [-t tag] [-d "description"]` | Save commands/notes as a memory |
-| `mem ask "question" [-n 5] [--min-score 0.4] [--answer] [--llm llama3.2]` | Semantic search. Each result shows its similarity (0–1); weak matches and ones far behind the best are hidden (`--min-score 0` shows everything). `--answer` also asks a local LLM to summarize the results |
+| `mem ask "question" [-n 5] [--min-score 0.4] [--answer] [--llm llama3.2]` | Hybrid search: semantic similarity plus exact keywords (error codes, flags, service names). Each result shows its similarity (0–1) and `keyword` if words matched; weak semantic matches are hidden (`--min-score 0` shows everything). Without Ollama it falls back to keyword matches. `--answer` also asks a local LLM to summarize the results |
 | `mem watch [--shell bash\|zsh]` | Start a recorded subshell; every command is logged until `exit` |
 | `mem remember "title" [-t tag] [-d "..."] [-n N]` | Turn the recorded session (or its last N commands) into a memory. Works inside the watched shell too |
 | `mem list [-t tag] [-n 20]` | List recent memories |

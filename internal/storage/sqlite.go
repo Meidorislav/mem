@@ -79,6 +79,29 @@ CREATE INDEX IF NOT EXISTS idx_memory_tags_memory_id ON memory_tags(memory_id);
 CREATE INDEX IF NOT EXISTS idx_memory_tags_tag_id    ON memory_tags(tag_id);
 CREATE INDEX IF NOT EXISTS idx_embedding_status      ON embedding_status(memory_id, needs_reindex);
 CREATE INDEX IF NOT EXISTS idx_memories_created_at   ON memories(created_at);
+
+-- Full-text index for keyword search; rowid is the memory id. Rows are
+-- written by SaveMemory and removed by the trigger below.
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+  title, description, tags, commands,
+  tokenize = 'unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER IF NOT EXISTS memories_fts_delete AFTER DELETE ON memories BEGIN
+  DELETE FROM memory_fts WHERE rowid = old.id;
+END;
+`
+
+// ftsRowSelect builds memory_fts rows from the relational tables; callers
+// append a WHERE clause on m.id.
+const ftsRowSelect = `
+	SELECT m.id, m.title, COALESCE(m.description, ''),
+	  COALESCE((SELECT group_concat(t.name, ' ')
+	            FROM memory_tags mt JOIN tags t ON t.id = mt.tag_id
+	            WHERE mt.memory_id = m.id), ''),
+	  COALESCE((SELECT group_concat(command, char(10))
+	            FROM (SELECT command FROM commands WHERE memory_id = m.id ORDER BY position)), '')
+	FROM memories m
 `
 
 type Store struct {
@@ -114,7 +137,41 @@ func NewStoreAt(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("initializing schema: %w", err)
 	}
 
-	return &Store{db: db}, nil
+	store := &Store{db: db}
+	if err := store.syncFTS(); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+// syncFTS indexes memories that are missing from memory_fts, e.g. ones
+// saved before keyword search existed.
+func (s *Store) syncFTS() error {
+	var missing bool
+	err := s.db.QueryRow(`
+		SELECT (SELECT COUNT(*) FROM memories) != (SELECT COUNT(*) FROM memory_fts)
+	`).Scan(&missing)
+	if err != nil {
+		return fmt.Errorf("checking keyword index: %w", err)
+	}
+	if !missing {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM memory_fts WHERE rowid NOT IN (SELECT id FROM memories)"); err != nil {
+		return fmt.Errorf("pruning keyword index: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO memory_fts (rowid, title, description, tags, commands)` + ftsRowSelect +
+		`WHERE m.id NOT IN (SELECT rowid FROM memory_fts)`); err != nil {
+		return fmt.Errorf("building keyword index: %w", err)
+	}
+	return tx.Commit()
 }
 
 func (s *Store) Close() error {
@@ -177,6 +234,10 @@ func (s *Store) SaveMemory(m *Memory) error {
 		if err != nil {
 			return fmt.Errorf("insert memory_tag: %w", err)
 		}
+	}
+
+	if _, err := tx.Exec(`INSERT INTO memory_fts (rowid, title, description, tags, commands)`+ftsRowSelect+`WHERE m.id = ?`, memID); err != nil {
+		return fmt.Errorf("index memory for keyword search: %w", err)
 	}
 
 	return tx.Commit()
