@@ -63,9 +63,14 @@ docs/i18n/ru/     # Russian docs
 - Ollama errors go through `ollama.RequestError` / `ollama.StatusError` so the user sees "not running at <url>: start it with `ollama serve`" or "run `ollama pull <model>`" instead of raw dial errors
 
 ### Keyword search (hybrid)
-- `memory_fts` (SQLite FTS5, `unicode61 remove_diacritics 2`, rowid = memory id) indexes title, description, tags and commands. `SaveMemory` inserts the row in its transaction; the `memories_fts_delete` trigger removes it; `NewStoreAt` backfills missing rows (`syncFTS`). Anything that edits a memory (a future `mem edit`) must rewrite its `memory_fts` row
+- `memory_fts` (SQLite FTS5, `unicode61 remove_diacritics 2`, rowid = memory id) indexes title, description, tags and commands. `SaveMemory` inserts the row in its transaction; the `memories_fts_delete` trigger removes it; `NewStoreAt` backfills missing rows (`syncFTS`). `UpdateMemory` (used by `mem edit`) rewrites the row; anything else that changes a memory's text must too
 - `ftsQuery` turns the question into quoted prefix terms OR-ed together (`"nginx"* OR "502"*`), dropping en/ru stop words, so user text can't inject FTS syntax; results are ranked by `bm25` with title/tags/commands weighted above description
 - `fuse` (`commands/rank.go`) merges `rankHits` output with keyword hits by reciprocal rank fusion (k = 60): memories found by both rank first, and keyword hits are shown even below `--min-score`. If embedding the query fails, `ask` falls back to keyword results with a warning
+
+### Editing and duplicates
+- `UpdateMemory` replaces title, description, commands and tags in one transaction (commands get new IDs), rewrites the `memory_fts` row and deletes the memory's `embedding_status` rows, so the following `indexNewMemory` re-embeds it; other memories are untouched
+- `mem edit` without flags round-trips the memory through `$VISUAL`/`$EDITOR` (`formatForEdit` / `parseEdit`): `key: value` header, then commands starting with `$ ` with continuation lines indented by two spaces
+- `save` and `remember` refuse an exact duplicate (same title, same commands in order; `FindDuplicate`) unless `--force`
 
 ### Model switching
 When changing embedding models, a full reindex is required — set `needs_reindex = TRUE` on all `embedding_status` rows and re-encode everything. `embedding_configs` tracks which model produced which vectors; exactly one row is `is_active`.
@@ -103,7 +108,6 @@ Key constraints:
 
 ## What's not built yet
 
-- Editing existing memories (`mem edit`); chunk hashes already support stale detection for it
 - Capturing command output in `mem watch` (`commands.output` column is unused)
 - Shells other than bash/zsh for `mem watch`
 

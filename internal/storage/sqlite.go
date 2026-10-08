@@ -199,11 +199,59 @@ func (s *Store) SaveMemory(m *Memory) error {
 	}
 	m.ID = memID
 
+	if err := writeContents(tx, m); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// UpdateMemory replaces m's title, description, commands and tags. Its
+// vectors become stale: the embedding_status rows are dropped so the next
+// index run re-embeds it from scratch.
+func (s *Store) UpdateMemory(m *Memory) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`
+		UPDATE memories SET title = ?, description = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, m.Title, m.Description, m.ID)
+	if err != nil {
+		return fmt.Errorf("update memory %d: %w", m.ID, err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrNotFound
+	}
+
+	for _, q := range []string{
+		"DELETE FROM commands WHERE memory_id = ?",
+		"DELETE FROM memory_tags WHERE memory_id = ?",
+		"DELETE FROM embedding_status WHERE memory_id = ?",
+		"DELETE FROM memory_fts WHERE rowid = ?",
+	} {
+		if _, err := tx.Exec(q, m.ID); err != nil {
+			return fmt.Errorf("clear memory %d: %w", m.ID, err)
+		}
+	}
+
+	if err := writeContents(tx, m); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// writeContents inserts m's commands and tags and its keyword index row.
+func writeContents(tx *sql.Tx, m *Memory) error {
 	for i, cmd := range m.Commands {
 		cmdRes, err := tx.Exec(`
 			INSERT INTO commands (memory_id, position, command, output)
 			VALUES (?, ?, ?, ?)
-		`, memID, i, cmd.Command, cmd.Output)
+		`, m.ID, i, cmd.Command, cmd.Output)
 		if err != nil {
 			return fmt.Errorf("insert command %d: %w", i, err)
 		}
@@ -212,9 +260,17 @@ func (s *Store) SaveMemory(m *Memory) error {
 			return err
 		}
 		m.Commands[i].ID = cmdID
+		m.Commands[i].MemoryID = m.ID
+		m.Commands[i].Position = i
 	}
 
+	seen := make(map[string]bool, len(m.Tags))
 	for _, tagName := range m.Tags {
+		if seen[tagName] {
+			continue
+		}
+		seen[tagName] = true
+
 		var tagID int64
 		err := tx.QueryRow("SELECT id FROM tags WHERE name = ?", tagName).Scan(&tagID)
 		if err == sql.ErrNoRows {
@@ -230,17 +286,59 @@ func (s *Store) SaveMemory(m *Memory) error {
 			return fmt.Errorf("query tag %s: %w", tagName, err)
 		}
 
-		_, err = tx.Exec("INSERT INTO memory_tags (memory_id, tag_id) VALUES (?, ?)", memID, tagID)
+		_, err = tx.Exec("INSERT INTO memory_tags (memory_id, tag_id) VALUES (?, ?)", m.ID, tagID)
 		if err != nil {
 			return fmt.Errorf("insert memory_tag: %w", err)
 		}
 	}
 
-	if _, err := tx.Exec(`INSERT INTO memory_fts (rowid, title, description, tags, commands)`+ftsRowSelect+`WHERE m.id = ?`, memID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO memory_fts (rowid, title, description, tags, commands)`+ftsRowSelect+`WHERE m.id = ?`, m.ID); err != nil {
 		return fmt.Errorf("index memory for keyword search: %w", err)
 	}
+	return nil
+}
 
-	return tx.Commit()
+// FindDuplicate returns the ID of a memory with the same title and the same
+// commands in the same order, or 0 if there is none.
+func (s *Store) FindDuplicate(title string, commands []string) (int64, error) {
+	rows, err := s.db.Query("SELECT id FROM memories WHERE title = ? ORDER BY id", title)
+	if err != nil {
+		return 0, fmt.Errorf("query duplicates: %w", err)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan duplicate id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate duplicates: %w", err)
+	}
+
+	candidates, err := s.GetMemoriesByIDs(ids)
+	if err != nil {
+		return 0, err
+	}
+	for _, c := range candidates {
+		if len(c.Commands) != len(commands) {
+			continue
+		}
+		same := true
+		for i, cmd := range c.Commands {
+			if cmd.Command != commands[i] {
+				same = false
+				break
+			}
+		}
+		if same {
+			return c.ID, nil
+		}
+	}
+	return 0, nil
 }
 
 func (s *Store) DeleteMemory(id int64) error {
