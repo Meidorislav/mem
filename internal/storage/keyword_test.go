@@ -8,11 +8,13 @@ import (
 
 func TestFTSQuery(t *testing.T) {
 	tests := []struct{ in, want string }{
-		{"how did I fix the nginx 502?", `"fix"* OR "nginx"* OR "502"*`},
-		{"как я чинил 502 в nginx", `"чинил"* OR "502"* OR "nginx"*`},
-		{`docker "run" --rm) OR NEAR(x`, `"docker"* OR "run"* OR "rm"* OR "near"*`},
+		{"how did I fix the nginx 502?", `"fix" OR "nginx"* OR "502"`},
+		{"как я чинил 502 в nginx", `"чин" OR "502" OR "nginx"*`},
+		{`docker "run" --rm) OR NEAR(x`, `"docker"* OR "run" OR "rm" OR "near"*`},
 		{"the a и в", ""},
-		{"ECONNREFUSED econnrefused", `"econnrefused"*`},
+		{"ECONNREFUSED econnrefused", `"econnrefus"*`},
+		{"ошибку ошибки ошибка", `"ошибк"*`},
+		{"посмотреть логи", `"посмотрет"* OR "лог"`},
 	}
 	for _, tt := range tests {
 		if got := ftsQuery(tt.in); got != tt.want {
@@ -86,5 +88,67 @@ func TestKeywordIndexBackfill(t *testing.T) {
 		if got, _ := store.KeywordSearch(q, 10); !reflect.DeepEqual(got, []int64{id}) {
 			t.Errorf("after backfill KeywordSearch(%q) = %v, want [%d]", q, got, id)
 		}
+	}
+}
+
+func TestKeywordSearchStemming(t *testing.T) {
+	store := newTestStore(t)
+	deploy := saveTestMemory(t, store, "поймали ошибку после деплоя", []string{"kubectl rollout undo deployment/api"}, nil)
+	logs := saveTestMemory(t, store, "логи сервиса", []string{"journalctl -u api"}, nil)
+	repl := saveTestMemory(t, store, "логическая репликация", []string{"wal_level = logical"}, nil)
+	commit := saveTestMemory(t, store, "отменить коммит", []string{"git reset --soft HEAD~1"}, nil)
+	yo := saveTestMemory(t, store, "ещё раз собрать образ", []string{"docker build ."}, nil)
+
+	tests := []struct {
+		query string
+		want  []int64
+	}{
+		{"ошибка", []int64{deploy}},            // ошибку / ошибка share the stem
+		{"ошибки при деплое", []int64{deploy}}, // several inflected forms
+		{"логи", []int64{logs}},                // short stem: no match on "логическая"
+		{"логическую", []int64{repl}},
+		{"коммита", []int64{commit}}, // stem "коммит" is a prefix of the word
+		{"еще собрать", []int64{yo}}, // ё folded to е
+	}
+	for _, tt := range tests {
+		got, err := store.KeywordSearch(tt.query, 10)
+		if err != nil {
+			t.Fatalf("KeywordSearch(%q): %v", tt.query, err)
+		}
+		if !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("KeywordSearch(%q) = %v, want %v", tt.query, got, tt.want)
+		}
+	}
+}
+
+func TestKeywordIndexRebuiltOnUpgrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	store, err := NewStoreAt(path)
+	if err != nil {
+		t.Fatalf("NewStoreAt: %v", err)
+	}
+	id := saveTestMemory(t, store, "сбор логов", nil, nil)
+
+	// Simulate an index written before stemming: raw text, version 0.
+	// "логи" is searched as the exact stem "лог", which only the stemmed
+	// index contains.
+	if _, err := store.db.Exec("UPDATE memory_fts SET title = 'сбор логов' WHERE rowid = ?", id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("PRAGMA user_version = 0"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.KeywordSearch("логи", 10); len(got) != 0 {
+		t.Fatalf("old index unexpectedly matched: %v", got)
+	}
+	store.Close()
+
+	store, err = NewStoreAt(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer store.Close()
+	if got, _ := store.KeywordSearch("логи", 10); !reflect.DeepEqual(got, []int64{id}) {
+		t.Errorf("after rebuild KeywordSearch(логи) = %v, want [%d]", got, id)
 	}
 }

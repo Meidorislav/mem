@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	github.com/apache/arrow/go/v17 v17.0.0
+	github.com/kljensen/snowball v0.10.0
 	github.com/lancedb/lancedb-go v0.1.2
 	github.com/spf13/cobra v1.10.2
 	modernc.org/sqlite v1.52.0

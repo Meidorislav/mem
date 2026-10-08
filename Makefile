@@ -1,4 +1,4 @@
-.PHONY: all build test lint clean download-artifacts
+.PHONY: all build install uninstall test lint clean download-artifacts
 
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
@@ -22,6 +22,10 @@ endif
 LANCEDB_VERSION := $(shell go list -m -f '{{.Version}}' github.com/lancedb/lancedb-go)
 LANCEDB_ARCHIVE := https://github.com/lancedb/lancedb-go/releases/download/$(LANCEDB_VERSION)/lancedb-go-native-binaries.tar.gz
 
+# Where `make install` puts the binary: $GOBIN, else $GOPATH/bin. Override
+# with e.g. `make install BINDIR=/usr/local/bin`.
+BINDIR ?= $(or $(shell go env GOBIN),$(shell go env GOPATH)/bin)
+
 CGO_CFLAGS := -I$(CURDIR)/include
 export CGO_CFLAGS
 export CGO_LDFLAGS
@@ -38,6 +42,17 @@ lib/$(PLATFORM)/liblancedb_go.a:
 
 build: lib/$(PLATFORM)/liblancedb_go.a
 	go build -o mem ./cmd/mem
+
+# The LanceDB library is linked statically, so the installed binary runs
+# from anywhere without the repo.
+install: lib/$(PLATFORM)/liblancedb_go.a
+	mkdir -p $(BINDIR)
+	go build -ldflags "-s -w" -o $(BINDIR)/mem ./cmd/mem
+	@echo "Installed $(BINDIR)/mem"
+	@case ":$$PATH:" in *":$(BINDIR):"*) ;; *) echo "Note: $(BINDIR) is not in your PATH; add it, e.g. export PATH=\"$(BINDIR):\$$PATH\"";; esac
+
+uninstall:
+	rm -f $(BINDIR)/mem
 
 test: lib/$(PLATFORM)/liblancedb_go.a
 	go test -v ./...
