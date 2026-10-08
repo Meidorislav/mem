@@ -17,6 +17,10 @@ import (
 // errCancelled means the user declined at a prompt; it is not a failure.
 var errCancelled = errors.New("cancelled")
 
+// errNoMatch is returned by `ask --print`, which has no other way to say
+// that nothing was found.
+var errNoMatch = errors.New("no matching memories")
+
 // stdinIsTerminal reports whether someone can answer prompts. A plain
 // character-device check is not enough: /dev/null is one too.
 func stdinIsTerminal() bool {
@@ -163,5 +167,17 @@ func useResult(m storage.Memory, copyIt, runIt bool) error {
 		}
 		return runCommands(cmds, userShell(), os.Stdin, os.Stdout, os.Stderr)
 	}
+	return nil
+}
+
+// printResult writes the top result's command(s) to stdout and nothing
+// else, for `ask --print`: the shell widget puts stdout on the command
+// line, while prompts go to stderr, i.e. the terminal.
+func printResult(m storage.Memory) error {
+	cmds, err := chooseCommands(m, bufio.NewReader(os.Stdin), os.Stderr, stdinIsTerminal())
+	if err != nil {
+		return err
+	}
+	fmt.Println(strings.Join(cmds, "\n"))
 	return nil
 }
