@@ -26,9 +26,11 @@ type modelInfo struct {
 }
 
 var models = map[string]modelInfo{
-	// Multilingual; no prefixes. minScore from real queries: relevant
-	// matches scored 0.47-0.61, unrelated ones at most 0.36.
-	"bge-m3":            {minScore: 0.42},
+	// Multilingual; no prefixes. minScore from scripts/calibrate.sh: the
+	// right answer ranked first for all 16 paraphrased questions, scoring
+	// 0.45-0.72 (0.47 at worst without a keyword match); unrelated questions
+	// scored 0.44 at best.
+	"bge-m3":            {minScore: 0.45},
 	"nomic-embed-text":  {document: "search_document: ", query: "search_query: "},
 	"mxbai-embed-large": {query: "Represent this sentence for searching relevant passages: "},
 }

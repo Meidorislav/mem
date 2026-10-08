@@ -28,7 +28,10 @@ internal/
   vector/         # LanceDB integration (vectors + memory_id only)
   session/        # `mem watch` shell recorder (bash/zsh hooks, session files)
   llm/            # Ollama generate client for `mem ask --answer`
-  ollama/         # shared Ollama settings (OLLAMA_HOST parsing)
+  ollama/         # shared Ollama settings (OLLAMA_HOST parsing, error messages)
+  paths/          # data directory: $MEM_HOME or ~/.mem
+scripts/
+  calibrate.sh    # seeds a scratch DB and prints scores to tune --min-score per model
 docs/i18n/ru/     # Russian docs
 ```
 
@@ -57,8 +60,8 @@ docs/i18n/ru/     # Russian docs
 
 ### Search scoring
 - Vectors are L2-normalized on insert and query, so LanceDB's L2 ranking equals cosine ranking. `vector.Search` returns `Hit{MemoryID, Score}` where `Score` is cosine similarity computed in Go from the returned embedding (correct even for vectors indexed before normalization)
-- `rankHits` (`commands/rank.go`) keeps one hit per memory (best chunk), drops scores below `--min-score` and anything more than `scoreGap` (0.15) behind the best hit; `--min-score 0` disables both
-- The default `--min-score` comes from `embeddings.MinScore(model)` (per-model table next to the task prefixes; 0.42 for bge-m3, measured on real queries; 0.4 fallback). Score distributions differ a lot between models, so calibrate a new model before adding it there
+- `rankHits` (`commands/rank.go`) keeps one hit per memory (best chunk), drops scores below `--min-score` and anything more than `scoreGap` (0.08) behind the best hit; `--min-score 0` disables both
+- The default `--min-score` comes from `embeddings.MinScore(model)` (per-model table next to the task prefixes; 0.45 for bge-m3 from `scripts/calibrate.sh`; 0.4 fallback). Score distributions differ a lot between models, so calibrate a new model before adding it there: `scripts/calibrate.sh` (or `MODEL=<name> scripts/calibrate.sh`) seeds a throwaway `MEM_HOME` with realistic memories and asks paraphrased questions with known answers plus unrelated ones; set the threshold between the worst right answer and the best unrelated one
 - `ask` warns on stderr when `CountUnindexedMemories` > 0
 - Ollama errors go through `ollama.RequestError` / `ollama.StatusError` so the user sees "not running at <url>: start it with `ollama serve`" or "run `ollama pull <model>`" instead of raw dial errors
 
