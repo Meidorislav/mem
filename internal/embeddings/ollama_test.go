@@ -54,3 +54,38 @@ func TestEmbedServerError(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 }
+
+func TestTaskPrefixes(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		got = append(got, req["prompt"])
+		json.NewEncoder(w).Encode(map[string]any{"embedding": []float32{1}})
+	}))
+	defer srv.Close()
+
+	tests := []struct {
+		model, doc, query string
+	}{
+		{"nomic-embed-text", "search_document: ls -lhS", "search_query: big files"},
+		{"nomic-embed-text:v1.5", "search_document: ls -lhS", "search_query: big files"},
+		{"mxbai-embed-large:latest", "ls -lhS", "Represent this sentence for searching relevant passages: big files"},
+		{"all-minilm", "ls -lhS", "big files"},
+	}
+	for _, tt := range tests {
+		got = nil
+		c := embeddings.NewClientWithURL(tt.model, srv.URL)
+		if _, err := c.EmbedDocument("ls -lhS"); err != nil {
+			t.Fatalf("EmbedDocument: %v", err)
+		}
+		if _, err := c.EmbedQuery("big files"); err != nil {
+			t.Fatalf("EmbedQuery: %v", err)
+		}
+		if len(got) != 2 || got[0] != tt.doc || got[1] != tt.query {
+			t.Errorf("%s: prompts = %q, want [%q %q]", tt.model, got, tt.doc, tt.query)
+		}
+	}
+}

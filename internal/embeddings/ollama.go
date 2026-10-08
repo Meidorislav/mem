@@ -5,9 +5,32 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
+
+	"github.com/meidori/mem/internal/ollama"
 )
 
-const defaultBaseURL = "http://localhost:11434"
+// Scheme identifies how text is prepared before embedding. Bump it when that
+// changes so existing vectors are flagged for reindexing.
+const Scheme = "task-prefix-v1"
+
+// taskPrefixes are the instructions some models expect in front of the text,
+// telling them whether it is a stored document or a search query. Vectors
+// made without them still work, but retrieval is noticeably worse.
+var taskPrefixes = map[string]struct{ document, query string }{
+	"nomic-embed-text":  {"search_document: ", "search_query: "},
+	"mxbai-embed-large": {"", "Represent this sentence for searching relevant passages: "},
+}
+
+// baseModel strips the tag and namespace: "library/nomic-embed-text:v1.5"
+// becomes "nomic-embed-text".
+func baseModel(model string) string {
+	model, _, _ = strings.Cut(model, ":")
+	if i := strings.LastIndex(model, "/"); i >= 0 {
+		model = model[i+1:]
+	}
+	return model
+}
 
 type Client struct {
 	baseURL string
@@ -16,7 +39,7 @@ type Client struct {
 }
 
 func NewClient(model string) *Client {
-	return NewClientWithURL(model, defaultBaseURL)
+	return NewClientWithURL(model, ollama.BaseURL())
 }
 
 func NewClientWithURL(model, baseURL string) *Client {
@@ -27,6 +50,17 @@ func NewClientWithURL(model, baseURL string) *Client {
 	}
 }
 
+// EmbedDocument embeds text that is stored and later searched.
+func (c *Client) EmbedDocument(text string) ([]float32, error) {
+	return c.Embed(taskPrefixes[baseModel(c.model)].document + text)
+}
+
+// EmbedQuery embeds a search query.
+func (c *Client) EmbedQuery(text string) ([]float32, error) {
+	return c.Embed(taskPrefixes[baseModel(c.model)].query + text)
+}
+
+// Embed embeds text as is, without any task prefix.
 func (c *Client) Embed(text string) ([]float32, error) {
 	body, err := json.Marshal(map[string]string{
 		"model":  c.model,
