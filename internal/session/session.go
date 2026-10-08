@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/meidori/mem/internal/paths"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -29,11 +30,11 @@ var ErrNoSession = errors.New("no recorded session found; start one with `mem wa
 
 // Dir returns the directory holding session files (~/.mem/sessions).
 func Dir() (string, error) {
-	home, err := os.UserHomeDir()
+	app, err := paths.AppDir()
 	if err != nil {
-		return "", fmt.Errorf("getting home dir: %w", err)
+		return "", err
 	}
-	return filepath.Join(home, ".mem", "sessions"), nil
+	return filepath.Join(app, "sessions"), nil
 }
 
 // Create makes a new empty session file in dir and returns its path.
