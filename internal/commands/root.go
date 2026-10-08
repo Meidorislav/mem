@@ -404,7 +404,7 @@ func init() {
 	saveCmd.Flags().BoolVar(&saveFlags.force, "force", false, "save even if an identical memory exists")
 
 	askCmd.Flags().IntVarP(&askFlags.limit, "limit", "n", 5, "maximum number of results to return")
-	askCmd.Flags().Float64Var(&askFlags.minScore, "min-score", 0, "hide results with a lower similarity (0-1); 0 shows everything (default: tuned per embedding model, 0.42 for bge-m3)")
+	askCmd.Flags().Float64Var(&askFlags.minScore, "min-score", 0, "hide results with a lower similarity (0-1); 0 shows everything (default: tuned per embedding model, 0.45 for bge-m3)")
 	askCmd.Flags().BoolVarP(&askFlags.answer, "answer", "a", false, "synthesize an answer from the results with a local LLM")
 	askCmd.Flags().StringVar(&askFlags.llm, "llm", "llama3.2", "Ollama model used by --answer")
 

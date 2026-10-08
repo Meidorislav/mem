@@ -11,8 +11,8 @@ func TestRankHits(t *testing.T) {
 	hits := []vector.Hit{
 		{MemoryID: 1, Score: 0.82},
 		{MemoryID: 1, Score: 0.80}, // second chunk of the same memory
-		{MemoryID: 2, Score: 0.74},
-		{MemoryID: 3, Score: 0.66}, // more than scoreGap behind the best
+		{MemoryID: 2, Score: 0.78},
+		{MemoryID: 3, Score: 0.70}, // more than scoreGap behind the best
 		{MemoryID: 4, Score: 0.30},
 	}
 

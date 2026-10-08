@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"sort"
 
@@ -14,6 +13,7 @@ import (
 	"github.com/apache/arrow/go/v17/arrow/memory"
 	"github.com/lancedb/lancedb-go/pkg/contracts"
 	lancedb "github.com/lancedb/lancedb-go/pkg/lancedb"
+	"github.com/meidori/mem/internal/paths"
 )
 
 const tableName = "embeddings"
@@ -128,11 +128,11 @@ func Reset(dims int) (*Store, error) {
 }
 
 func defaultPath() (string, error) {
-	home, err := os.UserHomeDir()
+	app, err := paths.AppDir()
 	if err != nil {
-		return "", fmt.Errorf("getting home dir: %w", err)
+		return "", err
 	}
-	return filepath.Join(home, ".mem", "vectors"), nil
+	return filepath.Join(app, "vectors"), nil
 }
 
 // Insert stores vec for memoryID. Vectors are L2-normalized so LanceDB's

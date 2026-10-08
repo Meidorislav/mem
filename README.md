@@ -78,7 +78,7 @@ make build                     # downloads LanceDB native libs on first run
 ./mem --help
 ```
 
-Data lives in `~/.mem/` (`mem.db` for SQLite, `vectors/` for LanceDB, `sessions/` for `mem watch`).
+Data lives in `~/.mem/` (`mem.db` for SQLite, `vectors/` for LanceDB, `sessions/` for `mem watch`); set `MEM_HOME` to use another directory, e.g. a scratch database.
 
 The default embedding model is `bge-m3`, which handles English and Russian in one index. English-only models such as `nomic-embed-text` work for English notes but score non-English questions close to noise; switch with `mem reindex --model <name>`.
 
@@ -91,7 +91,7 @@ After upgrading, `mem ask` may report memories that are not indexed with the cur
 | Command | What it does |
 |---|---|
 | `mem save "title" -c "cmd" [-c ...] [-t tag] [-d "description"] [--force]` | Save commands/notes as a memory. An exact copy of an existing memory (same title and commands) is refused unless `--force` |
-| `mem ask "question" [-n 5] [--min-score 0.42] [--answer] [--llm llama3.2]` | Hybrid search: semantic similarity plus exact keywords (error codes, flags, service names). Each result shows its similarity (0–1) and `keyword` if words matched; weak semantic matches are hidden (the default threshold is tuned per embedding model; `--min-score 0` shows everything). Without Ollama it falls back to keyword matches. `--answer` also asks a local LLM to summarize the results |
+| `mem ask "question" [-n 5] [--min-score 0.45] [--answer] [--llm llama3.2]` | Hybrid search: semantic similarity plus exact keywords (error codes, flags, service names). Each result shows its similarity (0–1) and `keyword` if words matched; weak semantic matches are hidden (the default threshold is tuned per embedding model; `--min-score 0` shows everything). Without Ollama it falls back to keyword matches. `--answer` also asks a local LLM to summarize the results |
 | `mem watch [--shell bash\|zsh]` | Start a recorded subshell; every command is logged until `exit` |
 | `mem remember "title" [-t tag] [-d "..."] [-n N]` | Turn the recorded session (or its last N commands) into a memory. Works inside the watched shell too |
 | `mem list [-t tag] [-n 20]` | List recent memories |
