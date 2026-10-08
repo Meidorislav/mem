@@ -84,6 +84,16 @@ Data lives in `~/.mem/` (`mem.db` for SQLite, `vectors/` for LanceDB, `sessions/
 
 The default embedding model is `bge-m3`, which handles English and Russian in one index. English-only models such as `nomic-embed-text` work for English notes but score non-English questions close to noise; switch with `mem reindex --model <name>`.
 
+### Shell widget
+
+Add one line to `~/.zshrc` (or `eval "$(mem init bash)"` to `~/.bashrc`):
+
+```bash
+eval "$(mem init zsh)"
+```
+
+Then type a question on the command line and press **Ctrl+G**: the line is replaced with the best matching command, ready to edit or run. If the memory has several commands, mem asks which one. Choose another key with `mem init zsh --key '^[m'` (Alt+M).
+
 MEM talks to Ollama at `127.0.0.1:11434`, or wherever `OLLAMA_HOST` points (same format as the `ollama` CLI: `host`, `host:port`, `http(s)://host:port`). Pointing it at another machine sends your notes and queries there.
 
 After upgrading, `mem ask` may report memories that are not indexed with the current settings; run `mem reindex` once to re-embed them.
@@ -100,6 +110,9 @@ After upgrading, `mem ask` may report memories that are not indexed with the cur
 | `mem show <id>` / `mem delete <id>...` | Inspect a memory, or remove one or more |
 | `mem edit <id> [--title ...] [-d ...] [-c ...] [-t ...]` | Change a memory with flags (`-c` / `-t` replace all commands / tags), or without flags in `$EDITOR`. The memory is re-indexed |
 | `mem reindex [--all] [--model name]` | Embed memories saved while Ollama was down, rebuild the index, or switch embedding model |
+| `mem init zsh\|bash [--key ^G]` | Print the shell widget (see below) |
+| `mem export [--format json\|md] [-o file]` | Back up all memories as JSON, or write them as readable Markdown |
+| `mem import <file.json\|->` | Restore a JSON export: keeps dates, skips memories already present (`--force` to import anyway), indexes them |
 
 Commands starting with a space are not recorded by `mem watch` if your shell ignores them for history (`HISTCONTROL=ignorespace` in bash, `setopt HIST_IGNORE_SPACE` in zsh).
 

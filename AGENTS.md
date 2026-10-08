@@ -77,6 +77,14 @@ docs/i18n/ru/     # Russian docs
 - `--copy` pipes to the first clipboard tool found (`pbcopy`, `wl-copy`, `xclip`, `xsel`, `clip.exe`)
 - `--run` always asks y/N first and refuses without a terminal; commands run through `$SHELL -c` in the current directory, one by one, stopping at the first non-zero exit. Never add a way to skip the confirmation: memories hold things like `rm -rf`
 
+### Shell widget (`mem init`)
+- `mem init zsh|bash` prints a widget (`commands/init.go`) that runs `mem ask --print -- "$BUFFER" </dev/tty` and replaces the line with stdout. `--print` writes only the chosen command(s) to stdout; prompts and errors go to stderr (the terminal), and "nothing found" is an error so the widget leaves the line untouched
+- `--key` takes zsh notation (`^G`, `^[m`); `bashKey` converts it to readline's (`\C-g`, `\em`)
+
+### Export / import
+- `mem export` writes `exportFile` JSON (`exportVersion` = 1): memories without IDs or vectors, with dates and command outputs; `--format md` is read-only Markdown. Bump `exportVersion` on incompatible changes and keep `readExport` accepting older versions
+- `mem import` skips exact duplicates (`FindDuplicate`) unless `--force`, saves with the original timestamps (`SaveMemory` uses `CreatedAt`/`UpdatedAt` when non-zero) and indexes the batch with one vector store (`indexAll`)
+
 ### Editing and duplicates
 - `UpdateMemory` replaces title, description, commands and tags in one transaction (commands get new IDs), rewrites the `memory_fts` row and deletes the memory's `embedding_status` rows, so the following `indexNewMemory` re-embeds it; other memories are untouched
 - `mem edit` without flags round-trips the memory through `$VISUAL`/`$EDITOR` (`formatForEdit` / `parseEdit`): `key: value` header, then commands starting with `$ ` with continuation lines indented by two spaces
@@ -118,7 +126,8 @@ Key constraints:
 
 ## What's not built yet
 
-- Capturing command output in `mem watch` (`commands.output` column is unused)
+- Capturing command output in `mem watch` (`commands.output` column is unused, though export/import already carry it)
+- Importing commands straight from shell history (`~/.zsh_history`)
 - Shells other than bash/zsh for `mem watch`
 
 ## Running locally
