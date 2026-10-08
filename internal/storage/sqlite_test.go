@@ -417,3 +417,28 @@ func TestCountUnindexedMemories(t *testing.T) {
 		t.Errorf("after MarkAllForReindex = %d, want 2", n)
 	}
 }
+
+func TestSetEmbeddingScheme(t *testing.T) {
+	store := newTestStore(t)
+	ec, err := store.GetOrCreateActiveEmbeddingConfig("test-model", 3)
+	if err != nil {
+		t.Fatalf("GetOrCreateActiveEmbeddingConfig: %v", err)
+	}
+	memID := saveTestMemory(t, store, "indexed", nil, nil)
+	if err := store.UpsertEmbeddingStatus(&EmbeddingStatus{MemoryID: memID, EmbeddingConfigID: ec.ID, ContentHash: "h"}); err != nil {
+		t.Fatalf("UpsertEmbeddingStatus: %v", err)
+	}
+
+	if err := store.SetEmbeddingScheme(ec.ID, "v2"); err != nil {
+		t.Fatalf("SetEmbeddingScheme: %v", err)
+	}
+
+	active, err := store.GetActiveEmbeddingConfig()
+	if err != nil || active == nil || active.Version == nil || *active.Version != "v2" {
+		t.Fatalf("active config = %+v, %v; want version v2", active, err)
+	}
+	st, _ := store.GetEmbeddingStatus(memID, nil, 0, ec.ID)
+	if st == nil || !st.NeedsReindex {
+		t.Errorf("status = %+v, want NeedsReindex", st)
+	}
+}
