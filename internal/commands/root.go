@@ -108,6 +108,8 @@ var askFlags struct {
 	minScore float64
 	answer   bool
 	llm      string
+	copy     bool
+	run      bool
 }
 
 var askCmd = &cobra.Command{
@@ -183,6 +185,10 @@ var askCmd = &cobra.Command{
 		}
 
 		fmt.Println(formatSearchResults(memories, notes))
+
+		if askFlags.copy || askFlags.run {
+			return useResult(memories[0], askFlags.copy, askFlags.run)
+		}
 		return nil
 	},
 }
@@ -407,6 +413,8 @@ func init() {
 	askCmd.Flags().Float64Var(&askFlags.minScore, "min-score", 0, "hide results with a lower similarity (0-1); 0 shows everything (default: tuned per embedding model, 0.45 for bge-m3)")
 	askCmd.Flags().BoolVarP(&askFlags.answer, "answer", "a", false, "synthesize an answer from the results with a local LLM")
 	askCmd.Flags().StringVar(&askFlags.llm, "llm", "llama3.2", "Ollama model used by --answer")
+	askCmd.Flags().BoolVar(&askFlags.copy, "copy", false, "copy the top result's command to the clipboard (asks which one if there are several)")
+	askCmd.Flags().BoolVar(&askFlags.run, "run", false, "run the top result's command after confirmation")
 
 	listCmd.Flags().StringVarP(&listFlags.tag, "tag", "t", "", "filter by tag")
 	listCmd.Flags().IntVarP(&listFlags.limit, "limit", "n", 20, "maximum number of items to list")
