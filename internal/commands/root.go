@@ -108,7 +108,7 @@ var askCmd = &cobra.Command{
 			return err
 		}
 
-		hits, semErr := semanticSearch(store, question, limit)
+		hits, model, semErr := semanticSearch(store, question, limit)
 		if semErr != nil {
 			// Keyword search needs no Ollama, so it can still answer.
 			if len(keywordIDs) == 0 {
@@ -117,12 +117,17 @@ var askCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Warning: semantic search unavailable, showing keyword matches only: %v\n", semErr)
 		}
 
-		results := fuse(rankHits(hits, askFlags.minScore, limit), hits, keywordIDs, limit)
+		minScore := askFlags.minScore
+		if !cmd.Flags().Changed("min-score") {
+			minScore = embeddings.MinScore(model)
+		}
+
+		results := fuse(rankHits(hits, minScore, limit), hits, keywordIDs, limit)
 		if len(results) == 0 {
 			if len(hits) == 0 {
 				fmt.Println("No matching memories found.")
 			} else {
-				fmt.Printf("No memories scored above %.2f (best: %.2f). Try a lower --min-score.\n", askFlags.minScore, hits[0].Score)
+				fmt.Printf("No memories scored above %.2f (best: %.2f). Try a lower --min-score.\n", minScore, hits[0].Score)
 			}
 			return nil
 		}
@@ -147,7 +152,7 @@ var askCmd = &cobra.Command{
 		if askFlags.answer {
 			prompt := llm.BuildPrompt(question, memories)
 			if err := llm.NewClient(askFlags.llm).Generate(prompt, os.Stdout); err != nil {
-				return fmt.Errorf("generating answer (ensure Ollama is running with '%s'): %w", askFlags.llm, err)
+				return fmt.Errorf("generating answer with %s: %w", askFlags.llm, err)
 			}
 			fmt.Print("\n\nSources:\n")
 		}
@@ -266,35 +271,35 @@ var deleteCmd = &cobra.Command{
 }
 
 // semanticSearch embeds question with the active model and returns the
-// nearest chunks, best first.
-func semanticSearch(store *storage.Store, question string, limit int) ([]vector.Hit, error) {
+// nearest chunks, best first, and the model that scored them.
+func semanticSearch(store *storage.Store, question string, limit int) ([]vector.Hit, string, error) {
 	cfg, err := activeConfig(store)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	vecStore, err := openVectors(cfg)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer vecStore.Close()
 
 	queryVec, err := embeddings.NewClient(cfg.ModelName).EmbedQuery(question)
 	if err != nil {
-		return nil, fmt.Errorf("generating query embedding (ensure Ollama is running with '%s'): %w", cfg.ModelName, err)
+		return nil, "", fmt.Errorf("embedding the question with %s: %w", cfg.ModelName, err)
 	}
 
 	// Multi-chunk memories return one hit per chunk, so over-fetch
 	// before deduplicating by memory ID.
 	hits, err := vecStore.Search(context.Background(), queryVec, max(limit*3, 10))
 	if err != nil {
-		return nil, fmt.Errorf("searching vector store: %w", err)
+		return nil, "", fmt.Errorf("searching vector store: %w", err)
 	}
 
 	if n, err := store.CountUnindexedMemories(cfg.ID); err == nil && n > 0 {
 		fmt.Fprintf(os.Stderr, "Note: %d %s not indexed with the current settings; run `mem reindex` to fix that.\n", n, plural(n, "memory is", "memories are"))
 	}
-	return hits, nil
+	return hits, cfg.ModelName, nil
 }
 
 // resultNote is the annotation shown next to a result: its similarity and
@@ -358,7 +363,7 @@ func init() {
 	saveCmd.Flags().StringVarP(&saveFlags.description, "description", "d", "", "longer description of the memory")
 
 	askCmd.Flags().IntVarP(&askFlags.limit, "limit", "n", 5, "maximum number of results to return")
-	askCmd.Flags().Float64Var(&askFlags.minScore, "min-score", defaultMinScore, "hide results with a lower similarity (0-1); 0 shows everything")
+	askCmd.Flags().Float64Var(&askFlags.minScore, "min-score", 0, "hide results with a lower similarity (0-1); 0 shows everything (default: tuned per embedding model, 0.42 for bge-m3)")
 	askCmd.Flags().BoolVarP(&askFlags.answer, "answer", "a", false, "synthesize an answer from the results with a local LLM")
 	askCmd.Flags().StringVar(&askFlags.llm, "llm", "llama3.2", "Ollama model used by --answer")
 
