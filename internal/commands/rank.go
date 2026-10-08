@@ -7,9 +7,11 @@ import (
 )
 
 // scoreGap drops results that trail the best match by more than this, so
-// one strong hit is not padded out with unrelated memories. The absolute
-// threshold depends on the model; see embeddings.MinScore.
-const scoreGap = 0.15
+// one strong hit is not padded out with unrelated memories. Calibrated on
+// bge-m3: wrong runners-up trailed the right answer by 0.10-0.15, while
+// genuinely related ones stayed within 0.02-0.06. The absolute threshold
+// depends on the model; see embeddings.MinScore.
+const scoreGap = 0.08
 
 // rankHits collapses per-chunk hits into one score per memory (its best
 // chunk), drops weak matches and returns at most limit memories, best first.
