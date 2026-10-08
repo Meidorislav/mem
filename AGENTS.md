@@ -88,6 +88,12 @@ Key constraints:
 - No external network calls — Ollama runs locally on `127.0.0.1:11434`, overridable with `OLLAMA_HOST` (parsed like the ollama CLI in `internal/ollama`); never hard-code the address in clients
 - Pure Go SQLite driver (no cgo) keeps builds simple and cross-platform
 
+## Commits
+
+- Author every commit as the repo owner so it counts on their GitHub contribution graph: run `git config user.name "Vladislav Bakin"` and `git config user.email "meidorislav@gmail.com"` in the clone before the first commit (a fresh clone does not carry this)
+- Credit the AI assistant with a `Co-Authored-By:` trailer at the end of the message instead of as the author
+- Work on `dev` and open PRs into `main`; PRs are merged with a merge commit (not squash), so individual commits land on `main` with their author intact
+
 ## What's not built yet
 
 - Editing existing memories (`mem edit`); chunk hashes already support stale detection for it
