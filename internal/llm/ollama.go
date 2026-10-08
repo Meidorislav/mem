@@ -46,12 +46,12 @@ func (c *Client) Generate(prompt string, w io.Writer) error {
 
 	resp, err := c.http.Post(c.baseURL+"/api/generate", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("ollama request: %w", err)
+		return ollama.RequestError(c.baseURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("ollama returned %d", resp.StatusCode)
+		return ollama.StatusError(resp, c.model)
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
