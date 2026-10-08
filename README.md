@@ -90,12 +90,13 @@ After upgrading, `mem ask` may report memories that are not indexed with the cur
 
 | Command | What it does |
 |---|---|
-| `mem save "title" -c "cmd" [-c ...] [-t tag] [-d "description"]` | Save commands/notes as a memory |
+| `mem save "title" -c "cmd" [-c ...] [-t tag] [-d "description"] [--force]` | Save commands/notes as a memory. An exact copy of an existing memory (same title and commands) is refused unless `--force` |
 | `mem ask "question" [-n 5] [--min-score 0.42] [--answer] [--llm llama3.2]` | Hybrid search: semantic similarity plus exact keywords (error codes, flags, service names). Each result shows its similarity (0–1) and `keyword` if words matched; weak semantic matches are hidden (the default threshold is tuned per embedding model; `--min-score 0` shows everything). Without Ollama it falls back to keyword matches. `--answer` also asks a local LLM to summarize the results |
 | `mem watch [--shell bash\|zsh]` | Start a recorded subshell; every command is logged until `exit` |
 | `mem remember "title" [-t tag] [-d "..."] [-n N]` | Turn the recorded session (or its last N commands) into a memory. Works inside the watched shell too |
 | `mem list [-t tag] [-n 20]` | List recent memories |
-| `mem show <id>` / `mem delete <id>` | Inspect or remove a memory |
+| `mem show <id>` / `mem delete <id>...` | Inspect a memory, or remove one or more |
+| `mem edit <id> [--title ...] [-d ...] [-c ...] [-t ...]` | Change a memory with flags (`-c` / `-t` replace all commands / tags), or without flags in `$EDITOR`. The memory is re-indexed |
 | `mem reindex [--all] [--model name]` | Embed memories saved while Ollama was down, rebuild the index, or switch embedding model |
 
 Commands starting with a space are not recorded by `mem watch` if your shell ignores them for history (`HISTCONTROL=ignorespace` in bash, `setopt HIST_IGNORE_SPACE` in zsh).

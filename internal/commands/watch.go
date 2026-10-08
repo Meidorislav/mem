@@ -84,6 +84,7 @@ var rememberFlags struct {
 	tags        []string
 	description string
 	last        int
+	force       bool
 }
 
 var rememberCmd = &cobra.Command{
@@ -137,6 +138,12 @@ finished session and removes it once saved.`,
 			m.Commands = append(m.Commands, storage.Command{Command: c})
 		}
 
+		if !rememberFlags.force {
+			if err := checkDuplicate(store, m); err != nil {
+				return err
+			}
+		}
+
 		if err := store.SaveMemory(m); err != nil {
 			return fmt.Errorf("saving memory: %w", err)
 		}
@@ -166,4 +173,5 @@ func init() {
 	rememberCmd.Flags().StringArrayVarP(&rememberFlags.tags, "tag", "t", nil, "tag to assign")
 	rememberCmd.Flags().StringVarP(&rememberFlags.description, "description", "d", "", "longer description of the memory")
 	rememberCmd.Flags().IntVarP(&rememberFlags.last, "last", "n", 0, "keep only the last N commands")
+	rememberCmd.Flags().BoolVar(&rememberFlags.force, "force", false, "save even if an identical memory exists")
 }

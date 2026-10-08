@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -440,5 +441,89 @@ func TestSetEmbeddingScheme(t *testing.T) {
 	st, _ := store.GetEmbeddingStatus(memID, nil, 0, ec.ID)
 	if st == nil || !st.NeedsReindex {
 		t.Errorf("status = %+v, want NeedsReindex", st)
+	}
+}
+
+func TestUpdateMemory(t *testing.T) {
+	store := newTestStore(t)
+	id := saveTestMemory(t, store, "old title", []string{"echo old", "rm -rf build"}, []string{"a", "b"})
+	other := saveTestMemory(t, store, "untouched", []string{"echo other"}, []string{"a"})
+
+	ec, err := store.GetOrCreateActiveEmbeddingConfig("test-model", 3)
+	if err != nil {
+		t.Fatalf("GetOrCreateActiveEmbeddingConfig: %v", err)
+	}
+	for _, mid := range []int64{id, other} {
+		if err := store.UpsertEmbeddingStatus(&EmbeddingStatus{MemoryID: mid, EmbeddingConfigID: ec.ID, ContentHash: "h"}); err != nil {
+			t.Fatalf("UpsertEmbeddingStatus: %v", err)
+		}
+	}
+
+	m := &Memory{
+		ID:          id,
+		Title:       "new title",
+		Description: "now with a description",
+		Commands:    []Command{{Command: "echo new"}},
+		Tags:        []string{"c", "c"},
+	}
+	if err := store.UpdateMemory(m); err != nil {
+		t.Fatalf("UpdateMemory: %v", err)
+	}
+
+	got, err := store.GetMemory(id)
+	if err != nil {
+		t.Fatalf("GetMemory: %v", err)
+	}
+	if got.Title != "new title" || got.Description != "now with a description" {
+		t.Errorf("memory = %+v, want updated title and description", got)
+	}
+	if len(got.Commands) != 1 || got.Commands[0].Command != "echo new" || got.Commands[0].Position != 0 {
+		t.Errorf("Commands = %+v, want [echo new]", got.Commands)
+	}
+	if !reflect.DeepEqual(got.Tags, []string{"c"}) {
+		t.Errorf("Tags = %v, want [c]", got.Tags)
+	}
+
+	// Edited memory needs reindexing; the other one is untouched.
+	if n, _ := store.CountUnindexedMemories(ec.ID); n != 1 {
+		t.Errorf("unindexed = %d, want 1", n)
+	}
+
+	// Keyword index follows the edit.
+	if ids, _ := store.KeywordSearch("old", 10); len(ids) != 0 {
+		t.Errorf("old text still found: %v", ids)
+	}
+	if ids, _ := store.KeywordSearch("description", 10); !reflect.DeepEqual(ids, []int64{id}) {
+		t.Errorf("KeywordSearch(description) = %v, want [%d]", ids, id)
+	}
+
+	if err := store.UpdateMemory(&Memory{ID: 999, Title: "x"}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("UpdateMemory(999) err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestFindDuplicate(t *testing.T) {
+	store := newTestStore(t)
+	id := saveTestMemory(t, store, "list files by size", []string{"ls -lhS"}, nil)
+	saveTestMemory(t, store, "list files by size", []string{"ls -lhS", "du -sh"}, nil)
+
+	tests := []struct {
+		title    string
+		commands []string
+		want     int64
+	}{
+		{"list files by size", []string{"ls -lhS"}, id},
+		{"list files by size", []string{"ls -lh"}, 0},
+		{"list files", []string{"ls -lhS"}, 0},
+		{"list files by size", nil, 0},
+	}
+	for _, tt := range tests {
+		got, err := store.FindDuplicate(tt.title, tt.commands)
+		if err != nil {
+			t.Fatalf("FindDuplicate: %v", err)
+		}
+		if got != tt.want {
+			t.Errorf("FindDuplicate(%q, %q) = %d, want %d", tt.title, tt.commands, got, tt.want)
+		}
 	}
 }

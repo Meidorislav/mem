@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/meidori/mem/internal/embeddings"
@@ -35,6 +36,7 @@ var saveFlags struct {
 	commands    []string
 	tags        []string
 	description string
+	force       bool
 }
 
 var saveCmd = &cobra.Command{
@@ -59,6 +61,12 @@ var saveCmd = &cobra.Command{
 			m.Commands = append(m.Commands, storage.Command{Command: c})
 		}
 
+		if !saveFlags.force {
+			if err := checkDuplicate(store, m); err != nil {
+				return err
+			}
+		}
+
 		if err := store.SaveMemory(m); err != nil {
 			return fmt.Errorf("saving memory: %w", err)
 		}
@@ -67,6 +75,23 @@ var saveCmd = &cobra.Command{
 		warnIfNotIndexed(store, m)
 		return nil
 	},
+}
+
+// checkDuplicate refuses to save an exact copy (same title and commands) of
+// an existing memory, which would only clutter search results.
+func checkDuplicate(store *storage.Store, m *storage.Memory) error {
+	cmds := make([]string, len(m.Commands))
+	for i, c := range m.Commands {
+		cmds[i] = c.Command
+	}
+	id, err := store.FindDuplicate(m.Title, cmds)
+	if err != nil {
+		return err
+	}
+	if id != 0 {
+		return fmt.Errorf("already saved as #%d %q: change it with `mem edit %d`, or pass --force to save a copy", id, m.Title, id)
+	}
+	return nil
 }
 
 // warnIfNotIndexed indexes m and, on failure, tells the user how to recover.
@@ -236,14 +261,18 @@ var showCmd = &cobra.Command{
 }
 
 var deleteCmd = &cobra.Command{
-	Use:     "delete [id]",
+	Use:     "delete <id>...",
 	Aliases: []string{"rm", "remove"},
-	Short:   "Delete a memory by ID",
-	Args:    cobra.ExactArgs(1),
+	Short:   "Delete memories by ID",
+	Args:    cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var id int64
-		if _, err := fmt.Sscanf(args[0], "%d", &id); err != nil {
-			return fmt.Errorf("invalid memory ID: %s", args[0])
+		ids := make([]int64, len(args))
+		for i, a := range args {
+			id, err := strconv.ParseInt(a, 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid memory ID: %s", a)
+			}
+			ids[i] = id
 		}
 
 		store, err := storage.NewStore()
@@ -252,20 +281,31 @@ var deleteCmd = &cobra.Command{
 		}
 		defer store.Close()
 
-		if err := store.DeleteMemory(id); err != nil {
-			return fmt.Errorf("deleting memory: %w", err)
-		}
-
 		// SQLite is the source of truth; a leftover vector is harmless since
 		// search results are joined back to SQLite and unknown IDs skipped.
+		var vecStore *vector.Store
 		if cfg, err := store.GetActiveEmbeddingConfig(); err == nil && cfg != nil {
-			if vecStore, err := vector.NewStore(cfg.Dimensions); err == nil {
+			if vs, err := vector.NewStore(cfg.Dimensions); err == nil {
+				vecStore = vs
 				defer vecStore.Close()
-				_ = vecStore.Delete(context.Background(), id)
 			}
 		}
 
-		fmt.Printf("Deleted memory #%d\n", id)
+		failed := 0
+		for _, id := range ids {
+			if err := store.DeleteMemory(id); err != nil {
+				fmt.Fprintf(os.Stderr, "#%d: %v\n", id, err)
+				failed++
+				continue
+			}
+			if vecStore != nil {
+				_ = vecStore.Delete(context.Background(), id)
+			}
+			fmt.Printf("Deleted memory #%d\n", id)
+		}
+		if failed > 0 {
+			return fmt.Errorf("%d of %d memories not deleted", failed, len(ids))
+		}
 		return nil
 	},
 }
@@ -361,6 +401,7 @@ func init() {
 	saveCmd.Flags().StringArrayVarP(&saveFlags.commands, "command", "c", nil, "shell command to attach")
 	saveCmd.Flags().StringArrayVarP(&saveFlags.tags, "tag", "t", nil, "tag to assign")
 	saveCmd.Flags().StringVarP(&saveFlags.description, "description", "d", "", "longer description of the memory")
+	saveCmd.Flags().BoolVar(&saveFlags.force, "force", false, "save even if an identical memory exists")
 
 	askCmd.Flags().IntVarP(&askFlags.limit, "limit", "n", 5, "maximum number of results to return")
 	askCmd.Flags().Float64Var(&askFlags.minScore, "min-score", 0, "hide results with a lower similarity (0-1); 0 shows everything (default: tuned per embedding model, 0.42 for bge-m3)")
