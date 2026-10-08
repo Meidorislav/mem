@@ -96,47 +96,29 @@ var askCmd = &cobra.Command{
 		}
 		defer store.Close()
 
-		cfg, err := activeConfig(store)
-		if err != nil {
-			return err
-		}
-
-		vecStore, err := openVectors(cfg)
-		if err != nil {
-			return err
-		}
-		defer vecStore.Close()
-
 		question := strings.Join(args, " ")
-
-		queryVec, err := embeddings.NewClient(cfg.ModelName).EmbedQuery(question)
-		if err != nil {
-			return fmt.Errorf("generating query embedding (ensure Ollama is running with '%s'): %w", cfg.ModelName, err)
-		}
 
 		limit := askFlags.limit
 		if limit <= 0 {
 			limit = 5
 		}
 
-		// Multi-chunk memories return one hit per chunk, so over-fetch
-		// before deduplicating by memory ID.
-		candidateLimit := limit * 3
-		if candidateLimit < 10 {
-			candidateLimit = 10
-		}
-
-		hits, err := vecStore.Search(context.Background(), queryVec, candidateLimit)
+		keywordIDs, err := store.KeywordSearch(question, limit)
 		if err != nil {
-			return fmt.Errorf("searching vector store: %w", err)
+			return err
 		}
 
-		if n, err := store.CountUnindexedMemories(cfg.ID); err == nil && n > 0 {
-			fmt.Fprintf(os.Stderr, "Note: %d %s not indexed with the current settings; run `mem reindex` to fix that.\n", n, plural(n, "memory is", "memories are"))
+		hits, semErr := semanticSearch(store, question, limit)
+		if semErr != nil {
+			// Keyword search needs no Ollama, so it can still answer.
+			if len(keywordIDs) == 0 {
+				return semErr
+			}
+			fmt.Fprintf(os.Stderr, "Warning: semantic search unavailable, showing keyword matches only: %v\n", semErr)
 		}
 
-		ranked := rankHits(hits, askFlags.minScore, limit)
-		if len(ranked) == 0 {
+		results := fuse(rankHits(hits, askFlags.minScore, limit), hits, keywordIDs, limit)
+		if len(results) == 0 {
 			if len(hits) == 0 {
 				fmt.Println("No matching memories found.")
 			} else {
@@ -145,11 +127,11 @@ var askCmd = &cobra.Command{
 			return nil
 		}
 
-		ids := make([]int64, len(ranked))
-		scores := make(map[int64]float64, len(ranked))
-		for i, h := range ranked {
-			ids[i] = h.MemoryID
-			scores[h.MemoryID] = h.Score
+		ids := make([]int64, len(results))
+		notes := make(map[int64]string, len(results))
+		for i, r := range results {
+			ids[i] = r.MemoryID
+			notes[r.MemoryID] = resultNote(r)
 		}
 
 		memories, err := store.GetMemoriesByIDs(ids)
@@ -170,7 +152,7 @@ var askCmd = &cobra.Command{
 			fmt.Print("\n\nSources:\n")
 		}
 
-		fmt.Println(formatSearchResults(memories, scores))
+		fmt.Println(formatSearchResults(memories, notes))
 		return nil
 	},
 }
@@ -283,6 +265,51 @@ var deleteCmd = &cobra.Command{
 	},
 }
 
+// semanticSearch embeds question with the active model and returns the
+// nearest chunks, best first.
+func semanticSearch(store *storage.Store, question string, limit int) ([]vector.Hit, error) {
+	cfg, err := activeConfig(store)
+	if err != nil {
+		return nil, err
+	}
+
+	vecStore, err := openVectors(cfg)
+	if err != nil {
+		return nil, err
+	}
+	defer vecStore.Close()
+
+	queryVec, err := embeddings.NewClient(cfg.ModelName).EmbedQuery(question)
+	if err != nil {
+		return nil, fmt.Errorf("generating query embedding (ensure Ollama is running with '%s'): %w", cfg.ModelName, err)
+	}
+
+	// Multi-chunk memories return one hit per chunk, so over-fetch
+	// before deduplicating by memory ID.
+	hits, err := vecStore.Search(context.Background(), queryVec, max(limit*3, 10))
+	if err != nil {
+		return nil, fmt.Errorf("searching vector store: %w", err)
+	}
+
+	if n, err := store.CountUnindexedMemories(cfg.ID); err == nil && n > 0 {
+		fmt.Fprintf(os.Stderr, "Note: %d %s not indexed with the current settings; run `mem reindex` to fix that.\n", n, plural(n, "memory is", "memories are"))
+	}
+	return hits, nil
+}
+
+// resultNote is the annotation shown next to a result: its similarity and
+// whether the keyword index matched it.
+func resultNote(r result) string {
+	switch {
+	case r.Score >= 0 && r.Keyword:
+		return fmt.Sprintf("%.2f, keyword", r.Score)
+	case r.Keyword:
+		return "keyword"
+	default:
+		return fmt.Sprintf("%.2f", r.Score)
+	}
+}
+
 func plural(n int, one, many string) string {
 	if n == 1 {
 		return one
@@ -290,9 +317,9 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-// formatSearchResults renders memories as a numbered list. scores, when
-// non-nil, adds each memory's similarity to the query.
-func formatSearchResults(memories []storage.Memory, scores map[int64]float64) string {
+// formatSearchResults renders memories as a numbered list. notes, when
+// non-nil, adds an annotation such as the similarity to the query.
+func formatSearchResults(memories []storage.Memory, notes map[int64]string) string {
 	if len(memories) == 0 {
 		return "No matching memories found."
 	}
@@ -307,8 +334,8 @@ func formatSearchResults(memories []storage.Memory, scores map[int64]float64) st
 		if len(m.Tags) > 0 {
 			sb.WriteString(fmt.Sprintf("  [%s]", strings.Join(m.Tags, ", ")))
 		}
-		if score, ok := scores[m.ID]; ok {
-			sb.WriteString(fmt.Sprintf("  (%.2f)", score))
+		if note, ok := notes[m.ID]; ok {
+			sb.WriteString(fmt.Sprintf("  (%s)", note))
 		}
 
 		if m.Description != "" {
