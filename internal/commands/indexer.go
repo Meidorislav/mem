@@ -16,7 +16,7 @@ const (
 )
 
 type embedder interface {
-	Embed(text string) ([]float32, error)
+	EmbedDocument(text string) ([]float32, error)
 }
 
 type vectorIndex interface {
@@ -31,14 +31,31 @@ func activeConfig(store *storage.Store) (*storage.EmbeddingConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("getting active embedding config: %w", err)
 	}
-	if cfg != nil {
-		return cfg, nil
+	if cfg == nil {
+		cfg, err = store.GetOrCreateActiveEmbeddingConfig(defaultModel, defaultDims)
+		if err != nil {
+			return nil, fmt.Errorf("creating default embedding config: %w", err)
+		}
 	}
-	cfg, err = store.GetOrCreateActiveEmbeddingConfig(defaultModel, defaultDims)
-	if err != nil {
-		return nil, fmt.Errorf("creating default embedding config: %w", err)
+	if err := ensureScheme(store, cfg); err != nil {
+		return nil, err
 	}
 	return cfg, nil
+}
+
+// ensureScheme flags cfg's vectors for reindexing when they were built with
+// an older way of preparing text (e.g. before task prefixes), so `ask`
+// points the user at `mem reindex` instead of silently ranking worse.
+func ensureScheme(store *storage.Store, cfg *storage.EmbeddingConfig) error {
+	if cfg.Version != nil && *cfg.Version == embeddings.Scheme {
+		return nil
+	}
+	if err := store.SetEmbeddingScheme(cfg.ID, embeddings.Scheme); err != nil {
+		return fmt.Errorf("updating embedding scheme: %w", err)
+	}
+	scheme := embeddings.Scheme
+	cfg.Version = &scheme
+	return nil
 }
 
 func openVectors(cfg *storage.EmbeddingConfig) (*vector.Store, error) {
@@ -96,7 +113,7 @@ func indexMemory(ctx context.Context, store *storage.Store, emb embedder, vec ve
 	// leaves the old vectors in place.
 	vecs := make([][]float32, len(chunks))
 	for i, chunk := range chunks {
-		v, err := emb.Embed(chunk.Text)
+		v, err := emb.EmbedDocument(chunk.Text)
 		if err != nil {
 			return false, fmt.Errorf("generating embedding (is Ollama running with %q?): %w", cfg.ModelName, err)
 		}

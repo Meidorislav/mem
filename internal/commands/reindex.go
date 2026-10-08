@@ -56,6 +56,9 @@ Ollama was down. Safe to interrupt and re-run: finished memories are skipped.
 			if cfg, err = store.ActivateEmbeddingConfig(model, len(probe)); err != nil {
 				return err
 			}
+			if err := ensureScheme(store, cfg); err != nil {
+				return err
+			}
 			if vecStore, err = vector.Reset(cfg.Dimensions); err != nil {
 				return fmt.Errorf("resetting vector store: %w", err)
 			}
