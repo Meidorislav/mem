@@ -80,6 +80,10 @@ make build                     # downloads LanceDB native libs on first run
 
 Data lives in `~/.mem/` (`mem.db` for SQLite, `vectors/` for LanceDB, `sessions/` for `mem watch`).
 
+MEM talks to Ollama at `127.0.0.1:11434`, or wherever `OLLAMA_HOST` points (same format as the `ollama` CLI: `host`, `host:port`, `http(s)://host:port`). Pointing it at another machine sends your notes and queries there.
+
+After upgrading, `mem ask` may report memories that are not indexed with the current settings; run `mem reindex` once to re-embed them.
+
 ## 📖 Commands
 
 | Command | What it does |

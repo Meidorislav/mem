@@ -608,3 +608,22 @@ func (s *Store) CountUnindexedMemories(configID int64) (int, error) {
 	}
 	return n, nil
 }
+
+// SetEmbeddingScheme records how text is prepared for config's model and
+// flags its vectors for reindexing, since vectors built under a different
+// scheme are not comparable with new queries.
+func (s *Store) SetEmbeddingScheme(configID int64, scheme string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("UPDATE embedding_configs SET version = ? WHERE id = ?", scheme, configID); err != nil {
+		return fmt.Errorf("update embedding scheme: %w", err)
+	}
+	if _, err := tx.Exec("UPDATE embedding_status SET needs_reindex = TRUE WHERE embedding_config_id = ?", configID); err != nil {
+		return fmt.Errorf("mark embeddings for reindex: %w", err)
+	}
+	return tx.Commit()
+}

@@ -11,10 +11,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/meidori/mem/internal/ollama"
 	"github.com/meidori/mem/internal/storage"
 )
-
-const defaultBaseURL = "http://localhost:11434"
 
 type Client struct {
 	baseURL string
@@ -23,7 +22,7 @@ type Client struct {
 }
 
 func NewClient(model string) *Client {
-	return NewClientWithURL(model, defaultBaseURL)
+	return NewClientWithURL(model, ollama.BaseURL())
 }
 
 func NewClientWithURL(model, baseURL string) *Client {

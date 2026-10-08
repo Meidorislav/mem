@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/meidori/mem/internal/embeddings"
 	"github.com/meidori/mem/internal/storage"
 )
 
@@ -14,7 +15,7 @@ type fakeEmbedder struct {
 	err   error
 }
 
-func (f *fakeEmbedder) Embed(text string) ([]float32, error) {
+func (f *fakeEmbedder) EmbedDocument(text string) ([]float32, error) {
 	f.calls++
 	if f.err != nil {
 		return nil, f.err
@@ -123,5 +124,40 @@ func TestIndexMemoryEmbedFailureKeepsVectors(t *testing.T) {
 	}
 	if idx.deletes != 1 || idx.vectors[m.ID] != 3 {
 		t.Errorf("after failure: deletes=%d vectors=%d, want old vectors kept (1/3)", idx.deletes, idx.vectors[m.ID])
+	}
+}
+
+func TestActiveConfigFlagsOldSchemeOnce(t *testing.T) {
+	store, cfg, m := setupIndexTest(t)
+	ctx := context.Background()
+	idx := &fakeIndex{vectors: map[int64]int{}}
+
+	// Indexed before the scheme was tracked (config version is NULL).
+	if _, err := indexMemory(ctx, store, &fakeEmbedder{}, idx, cfg, m); err != nil {
+		t.Fatalf("indexMemory: %v", err)
+	}
+
+	active, err := activeConfig(store)
+	if err != nil {
+		t.Fatalf("activeConfig: %v", err)
+	}
+	if active.Version == nil || *active.Version != embeddings.Scheme {
+		t.Fatalf("Version = %v, want %q", active.Version, embeddings.Scheme)
+	}
+	if n, _ := store.CountUnindexedMemories(active.ID); n != 1 {
+		t.Fatalf("unindexed after scheme change = %d, want 1", n)
+	}
+
+	emb := &fakeEmbedder{}
+	if changed, err := indexMemory(ctx, store, emb, idx, active, m); err != nil || !changed {
+		t.Fatalf("reindex: changed=%v err=%v, want true", changed, err)
+	}
+
+	// Later runs must not flag everything again.
+	if active, err = activeConfig(store); err != nil {
+		t.Fatalf("activeConfig (again): %v", err)
+	}
+	if n, _ := store.CountUnindexedMemories(active.ID); n != 0 {
+		t.Errorf("unindexed on next run = %d, want 0", n)
 	}
 }

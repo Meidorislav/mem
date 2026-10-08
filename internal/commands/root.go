@@ -109,7 +109,7 @@ var askCmd = &cobra.Command{
 
 		question := strings.Join(args, " ")
 
-		queryVec, err := embeddings.NewClient(cfg.ModelName).Embed(question)
+		queryVec, err := embeddings.NewClient(cfg.ModelName).EmbedQuery(question)
 		if err != nil {
 			return fmt.Errorf("generating query embedding (ensure Ollama is running with '%s'): %w", cfg.ModelName, err)
 		}
@@ -132,7 +132,7 @@ var askCmd = &cobra.Command{
 		}
 
 		if n, err := store.CountUnindexedMemories(cfg.ID); err == nil && n > 0 {
-			fmt.Fprintf(os.Stderr, "Note: %d %s not indexed yet; run `mem reindex` to include them.\n", n, plural(n, "memory is", "memories are"))
+			fmt.Fprintf(os.Stderr, "Note: %d %s not indexed with the current settings; run `mem reindex` to fix that.\n", n, plural(n, "memory is", "memories are"))
 		}
 
 		ranked := rankHits(hits, askFlags.minScore, limit)

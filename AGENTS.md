@@ -28,6 +28,7 @@ internal/
   vector/         # LanceDB integration (vectors + memory_id only)
   session/        # `mem watch` shell recorder (bash/zsh hooks, session files)
   llm/            # Ollama generate client for `mem ask --answer`
+  ollama/         # shared Ollama settings (OLLAMA_HOST parsing)
 docs/i18n/ru/     # Russian docs
 ```
 
@@ -42,6 +43,8 @@ docs/i18n/ru/     # Russian docs
 - Encode at **save time**, not search time (SBERT siamese architecture)
 - One embedding model = one LanceDB index (vectors from different models are incompatible)
 - Track indexing state in `embedding_status` table; use `content_hash` to detect stale chunks
+- Task prefixes: documents go through `EmbedDocument`, queries through `EmbedQuery` (`search_document:` / `search_query:` for nomic-embed-text, a query instruction for mxbai-embed-large, nothing for other models). `Embed` sends text as is
+- `embeddings.Scheme` is stored in `embedding_configs.version`; `activeConfig` → `ensureScheme` flags all of the config's rows `needs_reindex` when it differs. Bump `Scheme` whenever the text sent to the model changes
 
 ### Chunking strategy
 - Each command is indexed as its own chunk
@@ -82,7 +85,7 @@ Key constraints:
 
 - All writes to SQLite go through a transaction with `defer tx.Rollback()`
 - Errors always wrapped with `fmt.Errorf("context: %w", err)`
-- No external network calls — Ollama runs locally on `localhost:11434`
+- No external network calls — Ollama runs locally on `127.0.0.1:11434`, overridable with `OLLAMA_HOST` (parsed like the ollama CLI in `internal/ollama`); never hard-code the address in clients
 - Pure Go SQLite driver (no cgo) keeps builds simple and cross-platform
 
 ## What's not built yet
