@@ -10,9 +10,12 @@ import (
 	"github.com/meidori/mem/internal/vector"
 )
 
+// defaultModel is used until the user picks another with `mem reindex
+// --model`. bge-m3 is multilingual; English-only models such as
+// nomic-embed-text score Russian queries close to noise.
 const (
-	defaultModel = "nomic-embed-text"
-	defaultDims  = 768
+	defaultModel = "bge-m3"
+	defaultDims  = 1024
 )
 
 type embedder interface {
@@ -115,7 +118,7 @@ func indexMemory(ctx context.Context, store *storage.Store, emb embedder, vec ve
 	for i, chunk := range chunks {
 		v, err := emb.EmbedDocument(chunk.Text)
 		if err != nil {
-			return false, fmt.Errorf("generating embedding (is Ollama running with %q?): %w", cfg.ModelName, err)
+			return false, fmt.Errorf("generating embedding with %s: %w", cfg.ModelName, err)
 		}
 		vecs[i] = v
 	}

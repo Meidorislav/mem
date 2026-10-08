@@ -14,7 +14,7 @@ Local-first CLI "second brain" for developers. Semantic search over terminal com
 - **CLI framework:** cobra + pflag
 - **Relational DB:** SQLite via `modernc.org/sqlite` (pure Go, no cgo)
 - **Vector DB:** LanceDB (embedded, no daemon)
-- **Embeddings:** `nomic-embed-text` or `mxbai-embed-large` via Ollama
+- **Embeddings:** `bge-m3` (default, multilingual) via Ollama; `nomic-embed-text` / `mxbai-embed-large` also supported but English-only
 - **LLM synthesis:** llama3.2 / qwen2.5 via Ollama
 
 ## Project structure
@@ -49,7 +49,7 @@ docs/i18n/ru/     # Russian docs
 ### Chunking strategy
 - Each command is indexed as its own chunk
 - Prepend title + tags as context: `"<command> | note: <title> | tags: <tag1>, <tag2>"`
-- Keep chunks under ~400 tokens (well within nomic-embed-text's 2048 limit)
+- Keep chunks under ~400 tokens (well within the models' context limits)
 - Store `chunk_index` in `embedding_status` for multi-chunk notes
 - A memory with a description (or no commands) also gets a context chunk with `command_id = NULL`
 - LanceDB rows only carry `memory_id`, so re-indexing replaces *all* vectors of a memory (`indexer.go`); embed first, then delete + insert, so an Ollama failure keeps old vectors
@@ -57,8 +57,10 @@ docs/i18n/ru/     # Russian docs
 
 ### Search scoring
 - Vectors are L2-normalized on insert and query, so LanceDB's L2 ranking equals cosine ranking. `vector.Search` returns `Hit{MemoryID, Score}` where `Score` is cosine similarity computed in Go from the returned embedding (correct even for vectors indexed before normalization)
-- `rankHits` (`commands/rank.go`) keeps one hit per memory (best chunk), drops scores below `--min-score` (default 0.4) and anything more than `scoreGap` (0.15) behind the best hit; `--min-score 0` disables both
+- `rankHits` (`commands/rank.go`) keeps one hit per memory (best chunk), drops scores below `--min-score` and anything more than `scoreGap` (0.15) behind the best hit; `--min-score 0` disables both
+- The default `--min-score` comes from `embeddings.MinScore(model)` (per-model table next to the task prefixes; 0.42 for bge-m3, measured on real queries; 0.4 fallback). Score distributions differ a lot between models, so calibrate a new model before adding it there
 - `ask` warns on stderr when `CountUnindexedMemories` > 0
+- Ollama errors go through `ollama.RequestError` / `ollama.StatusError` so the user sees "not running at <url>: start it with `ollama serve`" or "run `ollama pull <model>`" instead of raw dial errors
 
 ### Keyword search (hybrid)
 - `memory_fts` (SQLite FTS5, `unicode61 remove_diacritics 2`, rowid = memory id) indexes title, description, tags and commands. `SaveMemory` inserts the row in its transaction; the `memories_fts_delete` trigger removes it; `NewStoreAt` backfills missing rows (`syncFTS`). Anything that edits a memory (a future `mem edit`) must rewrite its `memory_fts` row
@@ -110,7 +112,7 @@ Key constraints:
 Requires Ollama running with at least one embedding model pulled, and the LanceDB native libraries (cgo). The Makefile downloads them into `lib/` and `include/` (gitignored) and sets `CGO_CFLAGS`/`CGO_LDFLAGS`:
 
 ```bash
-ollama pull nomic-embed-text
+ollama pull bge-m3
 make build   # or: make download-artifacts, then make test
 ./mem --help
 ```

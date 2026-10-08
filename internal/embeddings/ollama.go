@@ -14,12 +14,34 @@ import (
 // changes so existing vectors are flagged for reindexing.
 const Scheme = "task-prefix-v1"
 
-// taskPrefixes are the instructions some models expect in front of the text,
-// telling them whether it is a stored document or a search query. Vectors
-// made without them still work, but retrieval is noticeably worse.
-var taskPrefixes = map[string]struct{ document, query string }{
-	"nomic-embed-text":  {"search_document: ", "search_query: "},
-	"mxbai-embed-large": {"", "Represent this sentence for searching relevant passages: "},
+// modelInfo is what mem knows about a specific embedding model.
+type modelInfo struct {
+	// document and query are the instructions the model expects in front of
+	// the text. Vectors made without them still work, but retrieval is
+	// noticeably worse.
+	document, query string
+	// minScore is the cosine similarity that separates related from
+	// unrelated memories for this model; 0 means unknown.
+	minScore float64
+}
+
+var models = map[string]modelInfo{
+	// Multilingual; no prefixes. minScore from real queries: relevant
+	// matches scored 0.47-0.61, unrelated ones at most 0.36.
+	"bge-m3":            {minScore: 0.42},
+	"nomic-embed-text":  {document: "search_document: ", query: "search_query: "},
+	"mxbai-embed-large": {query: "Represent this sentence for searching relevant passages: "},
+}
+
+// fallbackMinScore is used for models without a measured threshold.
+const fallbackMinScore = 0.4
+
+// MinScore returns the default relevance threshold for model's scores.
+func MinScore(model string) float64 {
+	if s := models[baseModel(model)].minScore; s > 0 {
+		return s
+	}
+	return fallbackMinScore
 }
 
 // baseModel strips the tag and namespace: "library/nomic-embed-text:v1.5"
@@ -52,12 +74,12 @@ func NewClientWithURL(model, baseURL string) *Client {
 
 // EmbedDocument embeds text that is stored and later searched.
 func (c *Client) EmbedDocument(text string) ([]float32, error) {
-	return c.Embed(taskPrefixes[baseModel(c.model)].document + text)
+	return c.Embed(models[baseModel(c.model)].document + text)
 }
 
 // EmbedQuery embeds a search query.
 func (c *Client) EmbedQuery(text string) ([]float32, error) {
-	return c.Embed(taskPrefixes[baseModel(c.model)].query + text)
+	return c.Embed(models[baseModel(c.model)].query + text)
 }
 
 // Embed embeds text as is, without any task prefix.
@@ -72,12 +94,12 @@ func (c *Client) Embed(text string) ([]float32, error) {
 
 	resp, err := c.http.Post(c.baseURL+"/api/embeddings", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("ollama request: %w", err)
+		return nil, ollama.RequestError(c.baseURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama returned %d", resp.StatusCode)
+		return nil, ollama.StatusError(resp, c.model)
 	}
 
 	var result struct {
