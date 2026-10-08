@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+
+	"github.com/kljensen/snowball"
 )
 
 // bm25 column weights for memory_fts (title, description, tags, commands):
@@ -44,24 +46,79 @@ func (s *Store) KeywordSearch(query string, limit int) ([]int64, error) {
 	return ids, nil
 }
 
-// ftsQuery turns free text into an FTS5 query: every meaningful word,
-// quoted (so user input can't inject FTS syntax) and prefix-matched, OR-ed
-// together and left to bm25 to rank.
-func ftsQuery(text string) string {
-	words := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
+// minPrefixLen is the shortest term matched as a prefix. Shorter stems
+// match whole words only: "лог"* (from "логи") would also hit "логическую",
+// and "go"* every "google".
+const minPrefixLen = 4
 
+// ftsQuery turns free text into an FTS5 query: every meaningful word,
+// stemmed and quoted (so user input can't inject FTS syntax), longer ones
+// prefix-matched, OR-ed together and left to bm25 to rank.
+func ftsQuery(text string) string {
 	var terms []string
-	seen := make(map[string]bool, len(words))
-	for _, w := range words {
-		if len([]rune(w)) < 2 || stopWords[w] || seen[w] {
+	seen := map[string]bool{}
+	for _, w := range words(text) {
+		if len([]rune(w)) < 2 || stopWords[w] {
 			continue
 		}
-		seen[w] = true
-		terms = append(terms, `"`+w+`"*`)
+		t := stem(w)
+		if seen[t] {
+			continue
+		}
+		seen[t] = true
+		term := `"` + t + `"`
+		if len([]rune(t)) >= minPrefixLen {
+			term += "*"
+		}
+		terms = append(terms, term)
 	}
 	return strings.Join(terms, " OR ")
+}
+
+// ftsText is what memory_fts stores for a field: each word followed by its
+// stem when that differs, so "ошибку" in a command is found by "ошибка"
+// (both stem to "ошибк") and "коммита" by "коммит" (prefix of the word).
+func ftsText(text string) string {
+	var out []string
+	for _, w := range words(text) {
+		out = append(out, w)
+		if s := stem(w); s != w {
+			out = append(out, s)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+// words splits text into lowercase letter/digit runs, the way the
+// unicode61 tokenizer does. ё is folded to е, as people type both.
+func words(text string) []string {
+	text = strings.ReplaceAll(strings.ToLower(text), "ё", "е")
+	return strings.FieldsFunc(text, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+}
+
+// stem reduces a word to its Snowball stem: Russian for Cyrillic words,
+// English for Latin ones. Words it can't handle, and stems shorter than two
+// letters, come back unchanged.
+func stem(w string) string {
+	lang := ""
+	for _, r := range w {
+		switch {
+		case unicode.Is(unicode.Cyrillic, r):
+			lang = "russian"
+		case lang == "" && r >= 'a' && r <= 'z':
+			lang = "english"
+		}
+	}
+	if lang == "" {
+		return w
+	}
+	s, err := snowball.Stem(w, lang, false)
+	if err != nil || len([]rune(s)) < 2 {
+		return w
+	}
+	return s
 }
 
 // stopWords are dropped from keyword queries: they appear in almost every

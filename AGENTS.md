@@ -67,7 +67,9 @@ docs/i18n/ru/     # Russian docs
 
 ### Keyword search (hybrid)
 - `memory_fts` (SQLite FTS5, `unicode61 remove_diacritics 2`, rowid = memory id) indexes title, description, tags and commands. `SaveMemory` inserts the row in its transaction; the `memories_fts_delete` trigger removes it; `NewStoreAt` backfills missing rows (`syncFTS`). `UpdateMemory` (used by `mem edit`) rewrites the row; anything else that changes a memory's text must too
-- `ftsQuery` turns the question into quoted prefix terms OR-ed together (`"nginx"* OR "502"*`), dropping en/ru stop words, so user text can't inject FTS syntax; results are ranked by `bm25` with title/tags/commands weighted above description
+- Stemming (Snowball via `github.com/kljensen/snowball`, Russian for Cyrillic words, English for Latin): `ftsText` stores each word plus its stem when different (ё folded to е), and `ftsQuery` searches stems. Rows are built in Go (`insertFTS`), not SQL
+- `ftsQuery` turns the question into quoted stemmed terms OR-ed together (`"nginx"* OR "502" OR "ошибк"*`), dropping en/ru stop words, so user text can't inject FTS syntax. Only terms of `minPrefixLen` (4) letters or more are prefix-matched; shorter stems match whole words, otherwise `"лог"*` hits "логическую". Results are ranked by `bm25` with title/tags/commands weighted above description
+- `PRAGMA user_version` holds `ftsVersion`; when it is lower, `syncFTS` rebuilds the whole index on open. Bump `ftsVersion` whenever `ftsText` changes
 - `fuse` (`commands/rank.go`) merges `rankHits` output with keyword hits by reciprocal rank fusion (k = 60): memories found by both rank first, and keyword hits are shown even below `--min-score`. If embedding the query fails, `ask` falls back to keyword results with a warning
 
 ### Editing and duplicates
@@ -122,6 +124,7 @@ Requires Ollama running with at least one embedding model pulled, and the LanceD
 ollama pull bge-m3
 make build   # or: make download-artifacts, then make test
 ./mem --help
+make install # stripped binary into $GOBIN or $GOPATH/bin (BINDIR=... to override)
 ```
 
 `make lint` runs the gofmt check and `go vet`; CI (`.github/workflows/ci.yml`) runs `make lint` and `make test` on Linux and macOS for PRs and pushes to `main`, caching `lib/` and `include/`.

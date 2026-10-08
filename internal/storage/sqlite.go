@@ -93,18 +93,6 @@ CREATE TRIGGER IF NOT EXISTS memories_fts_delete AFTER DELETE ON memories BEGIN
 END;
 `
 
-// ftsRowSelect builds memory_fts rows from the relational tables; callers
-// append a WHERE clause on m.id.
-const ftsRowSelect = `
-	SELECT m.id, m.title, COALESCE(m.description, ''),
-	  COALESCE((SELECT group_concat(t.name, ' ')
-	            FROM memory_tags mt JOIN tags t ON t.id = mt.tag_id
-	            WHERE mt.memory_id = m.id), ''),
-	  COALESCE((SELECT group_concat(command, char(10))
-	            FROM (SELECT command FROM commands WHERE memory_id = m.id ORDER BY position)), '')
-	FROM memories m
-`
-
 type Store struct {
 	db *sql.DB
 }
@@ -143,18 +131,43 @@ func NewStoreAt(dbPath string) (*Store, error) {
 	return store, nil
 }
 
-// syncFTS indexes memories that are missing from memory_fts, e.g. ones
-// saved before keyword search existed.
+// ftsVersion is stored in PRAGMA user_version. Bump it when the text
+// written to memory_fts changes, so existing databases rebuild the index.
+// 1: words stemmed (see ftsText).
+const ftsVersion = 1
+
+// syncFTS keeps memory_fts complete: it rebuilds the index when it was
+// written by an older version, and otherwise indexes memories missing from
+// it (e.g. ones saved before keyword search existed).
 func (s *Store) syncFTS() error {
-	var missing bool
-	err := s.db.QueryRow(`
-		SELECT (SELECT COUNT(*) FROM memories) != (SELECT COUNT(*) FROM memory_fts)
-	`).Scan(&missing)
-	if err != nil {
-		return fmt.Errorf("checking keyword index: %w", err)
+	var version int
+	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return fmt.Errorf("reading schema version: %w", err)
 	}
-	if !missing {
-		return nil
+
+	query := "SELECT id FROM memories WHERE id NOT IN (SELECT rowid FROM memory_fts) ORDER BY id"
+	if version < ftsVersion {
+		query = "SELECT id FROM memories ORDER BY id"
+	} else {
+		var missing bool
+		err := s.db.QueryRow(`
+			SELECT (SELECT COUNT(*) FROM memories) != (SELECT COUNT(*) FROM memory_fts)
+		`).Scan(&missing)
+		if err != nil {
+			return fmt.Errorf("checking keyword index: %w", err)
+		}
+		if !missing {
+			return nil
+		}
+	}
+
+	ids, err := s.queryIDs(query)
+	if err != nil {
+		return err
+	}
+	memories, err := s.GetMemoriesByIDs(ids)
+	if err != nil {
+		return err
 	}
 
 	tx, err := s.db.Begin()
@@ -163,14 +176,59 @@ func (s *Store) syncFTS() error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec("DELETE FROM memory_fts WHERE rowid NOT IN (SELECT id FROM memories)"); err != nil {
+	prune := "DELETE FROM memory_fts WHERE rowid NOT IN (SELECT id FROM memories)"
+	if version < ftsVersion {
+		prune = "DELETE FROM memory_fts"
+	}
+	if _, err := tx.Exec(prune); err != nil {
 		return fmt.Errorf("pruning keyword index: %w", err)
 	}
-	if _, err := tx.Exec(`INSERT INTO memory_fts (rowid, title, description, tags, commands)` + ftsRowSelect +
-		`WHERE m.id NOT IN (SELECT rowid FROM memory_fts)`); err != nil {
-		return fmt.Errorf("building keyword index: %w", err)
+	for i := range memories {
+		if err := insertFTS(tx, &memories[i]); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", ftsVersion)); err != nil {
+		return fmt.Errorf("writing schema version: %w", err)
 	}
 	return tx.Commit()
+}
+
+func (s *Store) queryIDs(query string, args ...any) ([]int64, error) {
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query memory ids: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan memory id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate memory ids: %w", err)
+	}
+	return ids, nil
+}
+
+// insertFTS writes m's keyword index row.
+func insertFTS(tx *sql.Tx, m *Memory) error {
+	cmds := make([]string, len(m.Commands))
+	for i, c := range m.Commands {
+		cmds[i] = c.Command
+	}
+	_, err := tx.Exec(`
+		INSERT INTO memory_fts (rowid, title, description, tags, commands)
+		VALUES (?, ?, ?, ?, ?)
+	`, m.ID, ftsText(m.Title), ftsText(m.Description), ftsText(strings.Join(m.Tags, " ")), ftsText(strings.Join(cmds, "\n")))
+	if err != nil {
+		return fmt.Errorf("index memory %d for keyword search: %w", m.ID, err)
+	}
+	return nil
 }
 
 func (s *Store) Close() error {
@@ -291,10 +349,7 @@ func writeContents(tx *sql.Tx, m *Memory) error {
 		}
 	}
 
-	if _, err := tx.Exec(`INSERT INTO memory_fts (rowid, title, description, tags, commands)`+ftsRowSelect+`WHERE m.id = ?`, m.ID); err != nil {
-		return fmt.Errorf("index memory for keyword search: %w", err)
-	}
-	return nil
+	return insertFTS(tx, m)
 }
 
 // FindDuplicate returns the ID of a memory with the same title and the same
@@ -726,24 +781,7 @@ func (s *Store) MarkAllForReindex() error {
 
 // AllMemoryIDs returns the IDs of every stored memory, oldest first.
 func (s *Store) AllMemoryIDs() ([]int64, error) {
-	rows, err := s.db.Query("SELECT id FROM memories ORDER BY id")
-	if err != nil {
-		return nil, fmt.Errorf("query memory ids: %w", err)
-	}
-	defer rows.Close()
-
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan memory id: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate memory ids: %w", err)
-	}
-	return ids, nil
+	return s.queryIDs("SELECT id FROM memories ORDER BY id")
 }
 
 // CountUnindexedMemories counts memories that have no up-to-date vectors for
