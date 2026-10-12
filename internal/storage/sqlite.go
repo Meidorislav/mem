@@ -242,10 +242,11 @@ func (s *Store) SaveMemory(m *Memory) error {
 	}
 	defer tx.Rollback()
 
+	// Zero timestamps mean "now"; imports pass the original ones.
 	res, err := tx.Exec(`
-		INSERT INTO memories (title, source, description)
-		VALUES (?, ?, ?)
-	`, m.Title, m.Source, m.Description)
+		INSERT INTO memories (title, source, description, created_at, updated_at)
+		VALUES (?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))
+	`, m.Title, m.Source, m.Description, nullTime(m.CreatedAt), nullTime(m.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("insert memory: %w", err)
 	}
@@ -260,6 +261,13 @@ func (s *Store) SaveMemory(m *Memory) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func nullTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t.UTC()
 }
 
 // UpdateMemory replaces m's title, description, commands and tags. Its
