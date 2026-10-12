@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -110,6 +111,7 @@ var askFlags struct {
 	llm      string
 	copy     bool
 	run      bool
+	print    bool
 }
 
 var askCmd = &cobra.Command{
@@ -122,6 +124,10 @@ var askCmd = &cobra.Command{
 			return fmt.Errorf("opening store: %w", err)
 		}
 		defer store.Close()
+
+		if askFlags.print && (askFlags.answer || askFlags.copy || askFlags.run) {
+			return errors.New("--print can't be combined with --answer, --copy or --run")
+		}
 
 		question := strings.Join(args, " ")
 
@@ -152,8 +158,14 @@ var askCmd = &cobra.Command{
 		results := fuse(rankHits(hits, minScore, limit), hits, keywordIDs, limit)
 		if len(results) == 0 {
 			if len(hits) == 0 {
+				if askFlags.print {
+					return errNoMatch
+				}
 				fmt.Println("No matching memories found.")
 			} else {
+				if askFlags.print {
+					return errNoMatch
+				}
 				fmt.Printf("No memories scored above %.2f (best: %.2f). Try a lower --min-score.\n", minScore, hits[0].Score)
 			}
 			return nil
@@ -172,8 +184,15 @@ var askCmd = &cobra.Command{
 		}
 
 		if len(memories) == 0 {
+			if askFlags.print {
+				return errNoMatch
+			}
 			fmt.Println("No matching memories found.")
 			return nil
+		}
+
+		if askFlags.print {
+			return printResult(memories[0])
 		}
 
 		if askFlags.answer {
@@ -415,6 +434,7 @@ func init() {
 	askCmd.Flags().StringVar(&askFlags.llm, "llm", "llama3.2", "Ollama model used by --answer")
 	askCmd.Flags().BoolVar(&askFlags.copy, "copy", false, "copy the top result's command to the clipboard (asks which one if there are several)")
 	askCmd.Flags().BoolVar(&askFlags.run, "run", false, "run the top result's command after confirmation")
+	askCmd.Flags().BoolVar(&askFlags.print, "print", false, "print only the top result's command (for shell widgets, see `mem init`)")
 
 	listCmd.Flags().StringVarP(&listFlags.tag, "tag", "t", "", "filter by tag")
 	listCmd.Flags().IntVarP(&listFlags.limit, "limit", "n", 20, "maximum number of items to list")

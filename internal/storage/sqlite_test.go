@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func newTestStore(t *testing.T) *Store {
@@ -525,5 +526,32 @@ func TestFindDuplicate(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("FindDuplicate(%q, %q) = %d, want %d", tt.title, tt.commands, got, tt.want)
 		}
+	}
+}
+
+func TestSaveMemoryKeepsTimestamps(t *testing.T) {
+	store := newTestStore(t)
+	created := time.Date(2024, 3, 15, 9, 30, 0, 0, time.UTC)
+	updated := time.Date(2025, 1, 2, 18, 0, 5, 0, time.UTC)
+
+	m := &Memory{Title: "imported", Source: SourceRemember, CreatedAt: created, UpdatedAt: updated}
+	if err := store.SaveMemory(m); err != nil {
+		t.Fatalf("SaveMemory: %v", err)
+	}
+	got, err := store.GetMemory(m.ID)
+	if err != nil {
+		t.Fatalf("GetMemory: %v", err)
+	}
+	if !got.CreatedAt.Equal(created) || !got.UpdatedAt.Equal(updated) {
+		t.Errorf("timestamps = %v / %v, want %v / %v", got.CreatedAt, got.UpdatedAt, created, updated)
+	}
+
+	fresh := &Memory{Title: "new", Source: SourceSave}
+	if err := store.SaveMemory(fresh); err != nil {
+		t.Fatalf("SaveMemory: %v", err)
+	}
+	got, _ = store.GetMemory(fresh.ID)
+	if time.Since(got.CreatedAt) > time.Minute {
+		t.Errorf("CreatedAt = %v, want now", got.CreatedAt)
 	}
 }
