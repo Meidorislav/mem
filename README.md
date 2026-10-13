@@ -113,6 +113,7 @@ After upgrading, `mem ask` may report memories that are not indexed with the cur
 | `mem init zsh\|bash [--key ^G]` | Print the shell widget (see below) |
 | `mem export [--format json\|md] [-o file]` | Back up all memories as JSON, or write them as readable Markdown |
 | `mem import <file.json\|->` | Restore a JSON export: keeps dates, skips memories already present (`--force` to import anyway), indexes them |
+| `mem import --history [-n 30] [-t tag]` | Pick commands from your zsh/bash history: `3, 7-9` saves command 3 as one memory and 7–9 as another; a local LLM suggests each title (`--no-suggest` to turn off) |
 
 Commands starting with a space are not recorded by `mem watch` if your shell ignores them for history (`HISTCONTROL=ignorespace` in bash, `setopt HIST_IGNORE_SPACE` in zsh).
 

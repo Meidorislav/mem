@@ -30,6 +30,7 @@ internal/
   llm/            # Ollama generate client for `mem ask --answer`
   ollama/         # shared Ollama settings (OLLAMA_HOST parsing, error messages)
   paths/          # data directory: $MEM_HOME or ~/.mem
+  history/        # zsh/bash history parsing for `mem import --history`
 scripts/
   calibrate.sh    # seeds a scratch DB and prints scores to tune --min-score per model
 docs/i18n/ru/     # Russian docs
@@ -85,6 +86,11 @@ docs/i18n/ru/     # Russian docs
 - `mem export` writes `exportFile` JSON (`exportVersion` = 1): memories without IDs or vectors, with dates and command outputs; `--format md` is read-only Markdown. Bump `exportVersion` on incompatible changes and keep `readExport` accepting older versions
 - `mem import` skips exact duplicates (`FindDuplicate`) unless `--force`, saves with the original timestamps (`SaveMemory` uses `CreatedAt`/`UpdatedAt` when non-zero) and indexes the batch with one vector store (`indexAll`)
 
+### History import (`mem import --history`)
+- `history.Parse` reads zsh (plain or extended `: <ts>:<dur>;cmd`, lines ending in `\` continue) and bash (`#<ts>` lines skipped) history. zsh metafies bytes 0x83–0xa2 (e.g. Cyrillic у, ф, х): `0x83` followed by the byte XOR 0x20, undone by `unmetafy`; without it Russian commands come out garbled
+- `history.Recent` keeps the latest occurrence of each command and drops noise (`Interesting`: bare trivial commands, `cd`, `mem`, `git status`…)
+- Selection syntax (`parseSelection`): commas separate memories, spaces/ranges group commands into one. Titles are suggested by the `--llm` model with the user's last 5 titles as style examples (`titlePrompt` / `cleanTitle`); the first LLM error turns suggestions off for the run. Memories are saved with source `remember`, duplicates skipped, then indexed with `indexAll`. Interactive only
+
 ### Editing and duplicates
 - `UpdateMemory` replaces title, description, commands and tags in one transaction (commands get new IDs), rewrites the `memory_fts` row and deletes the memory's `embedding_status` rows, so the following `indexNewMemory` re-embeds it; other memories are untouched
 - `mem edit` without flags round-trips the memory through `$VISUAL`/`$EDITOR` (`formatForEdit` / `parseEdit`): `key: value` header, then commands starting with `$ ` with continuation lines indented by two spaces
@@ -127,7 +133,6 @@ Key constraints:
 ## What's not built yet
 
 - Capturing command output in `mem watch` (`commands.output` column is unused, though export/import already carry it)
-- Importing commands straight from shell history (`~/.zsh_history`)
 - Shells other than bash/zsh for `mem watch`
 
 ## Running locally
