@@ -158,17 +158,40 @@ func writeMarkdown(w io.Writer, memories []storage.Memory, now time.Time) error 
 }
 
 var importFlags struct {
-	force bool
+	force     bool
+	history   bool
+	file      string
+	last      int
+	tags      []string
+	llm       string
+	noSuggest bool
 }
 
 var importCmd = &cobra.Command{
-	Use:   "import <file.json|->",
-	Short: "Restore memories from a `mem export` JSON file",
+	Use:   "import <file.json|-> | --history",
+	Short: "Restore a `mem export` JSON file, or pick commands from shell history",
 	Long: `Add the memories from a ` + "`mem export`" + ` JSON file (or - for stdin), keeping
 their dates, then index them. Memories identical to one already stored
-(same title and commands) are skipped unless --force.`,
-	Args: cobra.ExactArgs(1),
+(same title and commands) are skipped unless --force.
+
+With --history, list recent commands from your shell history and pick the
+ones worth keeping: "3, 7-9" saves command 3 as one memory and 7 to 9 as
+another. Each gets a title, suggested by a local LLM in the style of your
+existing titles unless --no-suggest.
+
+  mem import ~/mem-backup.json
+  mem import --history -n 50 -t work`,
+	Args: func(cmd *cobra.Command, args []string) error {
+		if importFlags.history {
+			return cobra.NoArgs(cmd, args)
+		}
+		return cobra.ExactArgs(1)(cmd, args)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if importFlags.history {
+			return runHistoryImport()
+		}
+
 		var r io.Reader = os.Stdin
 		if args[0] != "-" {
 			f, err := os.Open(args[0])
@@ -298,6 +321,12 @@ func init() {
 	exportCmd.Flags().StringVar(&exportFlags.format, "format", "json", "json (for mem import) or md")
 	exportCmd.Flags().StringVarP(&exportFlags.output, "output", "o", "", "file to write (default stdout)")
 	importCmd.Flags().BoolVar(&importFlags.force, "force", false, "import memories even if an identical one exists")
+	importCmd.Flags().BoolVar(&importFlags.history, "history", false, "pick commands from shell history instead of reading a file")
+	importCmd.Flags().StringVar(&importFlags.file, "file", "", "history file for --history (default $HISTFILE, ~/.zsh_history or ~/.bash_history)")
+	importCmd.Flags().IntVarP(&importFlags.last, "last", "n", 30, "how many recent commands --history lists")
+	importCmd.Flags().StringArrayVarP(&importFlags.tags, "tag", "t", nil, "tag for memories imported with --history")
+	importCmd.Flags().StringVar(&importFlags.llm, "llm", "llama3.2", "Ollama model that suggests titles for --history")
+	importCmd.Flags().BoolVar(&importFlags.noSuggest, "no-suggest", false, "don't ask the LLM for title suggestions")
 	rootCmd.AddCommand(exportCmd)
 	rootCmd.AddCommand(importCmd)
 }
