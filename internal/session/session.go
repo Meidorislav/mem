@@ -37,18 +37,33 @@ func Dir() (string, error) {
 	return filepath.Join(app, "sessions"), nil
 }
 
-// Create makes a new empty session file in dir and returns its path.
-func Create(dir string) (string, error) {
+// Create makes a new empty session file in dir for the named shell and
+// returns its path. The shell goes into the file name (see ShellOf).
+func Create(dir, shell string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("creating session dir: %w", err)
 	}
-	name := time.Now().Format("20060102-150405.000000000") + fileExt
-	path := filepath.Join(dir, name)
+	name := time.Now().Format("20060102-150405.000000000")
+	if shell != "" {
+		name += "." + shell
+	}
+	path := filepath.Join(dir, name+fileExt)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return "", fmt.Errorf("creating session file: %w", err)
 	}
 	return path, f.Close()
+}
+
+// ShellOf returns the shell a session file was recorded in, or "" for files
+// from before the shell was part of the name.
+func ShellOf(path string) string {
+	ext := filepath.Ext(strings.TrimSuffix(filepath.Base(path), fileExt))
+	switch shell := strings.TrimPrefix(ext, "."); shell {
+	case "bash", "zsh", "fish":
+		return shell
+	}
+	return ""
 }
 
 // Latest returns the most recent session file in dir.
@@ -84,14 +99,18 @@ func Read(path string) ([]string, error) {
 	return cmds, nil
 }
 
-// Clean drops noise from recorded command lines: blanks, mem's own
-// invocations, shell exits and consecutive duplicates. Multi-line records
-// (e.g. a pasted block that zsh runs as one line) are split into their
-// separate commands first.
-func Clean(cmds []string) []string {
+// Clean drops noise from command lines recorded in shell: blanks, mem's
+// own invocations, shell exits and consecutive duplicates. Multi-line
+// records (e.g. a pasted block that zsh or fish runs as one line) are split
+// into their separate commands first.
+func Clean(cmds []string, shell string) []string {
+	split := splitLines
+	if shell == "fish" {
+		split = splitFish
+	}
 	var out []string
 	for _, rec := range cmds {
-		for _, c := range splitLines(rec) {
+		for _, c := range split(rec) {
 			c = strings.TrimSpace(c)
 			if c == "" || isNoise(c) {
 				continue
@@ -174,18 +193,32 @@ func (s *Shell) Cmd() *exec.Cmd { return s.cmd }
 // Cleanup removes the temporary startup files.
 func (s *Shell) Cleanup() { os.RemoveAll(s.tmp) }
 
-// NewShell prepares an interactive shell that records its commands into
-// sessionPath. shellPath may be empty to use $SHELL.
-func NewShell(shellPath, sessionPath string) (*Shell, error) {
+// ResolveShell finds the shell to watch: shellPath, else $SHELL, else bash.
+// It returns the executable and its name (bash, zsh or fish).
+func ResolveShell(shellPath string) (path, name string, err error) {
 	if shellPath == "" {
 		shellPath = os.Getenv("SHELL")
 	}
 	if shellPath == "" {
 		shellPath = "bash"
 	}
-	resolved, err := exec.LookPath(shellPath)
+	path, err = exec.LookPath(shellPath)
 	if err != nil {
-		return nil, fmt.Errorf("finding shell %q: %w", shellPath, err)
+		return "", "", fmt.Errorf("finding shell %q: %w", shellPath, err)
+	}
+	switch name = filepath.Base(path); name {
+	case "bash", "zsh", "fish":
+		return path, name, nil
+	}
+	return "", "", fmt.Errorf("unsupported shell %q (supported: bash, zsh, fish); pick one with --shell", name)
+}
+
+// NewShell prepares an interactive shell that records its commands into
+// sessionPath. shellPath may be empty to use $SHELL.
+func NewShell(shellPath, sessionPath string) (*Shell, error) {
+	resolved, name, err := ResolveShell(shellPath)
+	if err != nil {
+		return nil, err
 	}
 
 	tmp, err := os.MkdirTemp("", "mem-watch-")
@@ -193,7 +226,6 @@ func NewShell(shellPath, sessionPath string) (*Shell, error) {
 		return nil, fmt.Errorf("creating temp dir: %w", err)
 	}
 
-	name := filepath.Base(resolved)
 	env := append(os.Environ(), EnvVar+"="+sessionPath)
 
 	var cmd *exec.Cmd
@@ -216,9 +248,9 @@ func NewShell(shellPath, sessionPath string) (*Shell, error) {
 		}
 		env = append(env, "MEM_ORIG_ZDOTDIR="+orig, "ZDOTDIR="+tmp)
 		cmd = exec.Command(resolved, "-i")
-	default:
-		os.RemoveAll(tmp)
-		return nil, fmt.Errorf("unsupported shell %q (supported: bash, zsh); pick one with --shell", name)
+	case "fish":
+		// -C runs after the user's config.fish, before the first prompt.
+		cmd = exec.Command(resolved, "-i", "-C", fishRC)
 	}
 
 	cmd.Env = env
@@ -286,4 +318,25 @@ __mem_record() {
 autoload -Uz add-zsh-hook
 add-zsh-hook preexec __mem_record
 PROMPT="(mem) $PROMPT"
+`
+
+// fishRC logs each command line from the fish_preexec event, skipping
+// space-prefixed ones like fish's own history does, and prefixes the
+// prompt while keeping $status for prompts that show it.
+const fishRC = `function __mem_record --on-event fish_preexec
+    string match -q -- ' *' $argv[1]; and return
+    string join0 -- $argv[1] >> $MEM_SESSION
+end
+if functions -q fish_prompt
+    functions -c fish_prompt __mem_orig_prompt
+    function __mem_status
+        return $argv[1]
+    end
+    function fish_prompt
+        set -l s $status
+        printf '(mem) '
+        __mem_status $s
+        __mem_orig_prompt
+    end
+end
 `

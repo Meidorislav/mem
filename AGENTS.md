@@ -26,11 +26,11 @@ internal/
   storage/        # SQLite layer (Store, SaveMemory, embedding configs/status)
   embeddings/     # Ollama embedding client
   vector/         # LanceDB integration (vectors + memory_id only)
-  session/        # `mem watch` shell recorder (bash/zsh hooks, session files)
+  session/        # `mem watch` shell recorder (bash/zsh/fish hooks, session files)
   llm/            # Ollama generate client for `mem ask --answer`
   ollama/         # shared Ollama settings (OLLAMA_HOST parsing, error messages)
   paths/          # data directory: $MEM_HOME or ~/.mem
-  history/        # zsh/bash history parsing for `mem import --history`
+  history/        # zsh/bash/fish history parsing for `mem import --history`
 scripts/
   calibrate.sh    # seeds a scratch DB and prints scores to tune --min-score per model
 docs/i18n/ru/     # Russian docs
@@ -79,15 +79,16 @@ docs/i18n/ru/     # Russian docs
 - `--run` always asks y/N first and refuses without a terminal; commands run through `$SHELL -c` in the current directory, one by one, stopping at the first non-zero exit. Never add a way to skip the confirmation: memories hold things like `rm -rf`
 
 ### Shell widget (`mem init`)
-- `mem init zsh|bash` prints a widget (`commands/init.go`) that runs `mem ask --print -- "$BUFFER" </dev/tty` and replaces the line with stdout. `--print` writes only the chosen command(s) to stdout; prompts and errors go to stderr (the terminal), and "nothing found" is an error so the widget leaves the line untouched
-- `--key` takes zsh notation (`^G`, `^[m`); `bashKey` converts it to readline's (`\C-g`, `\em`)
+- `mem init zsh|bash|fish` prints a widget (`commands/init.go`) that runs `mem ask --print -- "$BUFFER" </dev/tty` and replaces the line with stdout. `--print` writes only the chosen command(s) to stdout; prompts and errors go to stderr (the terminal), and "nothing found" is an error so the widget leaves the line untouched
+- fish bindings and bash `bind -x` run mem with the terminal still in raw mode (no `icanon`/`icrnl`/`echo`), so an answer to "Which command?" would never arrive; `cookedTerminal` (`pick.go`) switches them on with `stty` around the prompt and restores the saved state
+- `--key` takes zsh notation (`^G`, `^[m`); `bashKey` converts it to readline's (`\C-g`, `\em`), `fishKey` to fish's (`\cg`, `\em`, accepted by fish 3 and 4)
 
 ### Export / import
 - `mem export` writes `exportFile` JSON (`exportVersion` = 1): memories without IDs or vectors, with dates and command outputs; `--format md` is read-only Markdown. Bump `exportVersion` on incompatible changes and keep `readExport` accepting older versions
 - `mem import` skips exact duplicates (`FindDuplicate`) unless `--force`, saves with the original timestamps (`SaveMemory` uses `CreatedAt`/`UpdatedAt` when non-zero) and indexes the batch with one vector store (`indexAll`)
 
 ### History import (`mem import --history`)
-- `history.Parse` reads zsh (plain or extended `: <ts>:<dur>;cmd`, lines ending in `\` continue) and bash (`#<ts>` lines skipped) history. zsh metafies bytes 0x83–0xa2 (e.g. Cyrillic у, ф, х): `0x83` followed by the byte XOR 0x20, undone by `unmetafy`; without it Russian commands come out garbled
+- `history.Parse` reads zsh (plain or extended `: <ts>:<dur>;cmd`, lines ending in `\` continue), bash (`#<ts>` lines skipped) and fish (`- cmd: ` entries, `\\` and `\n` unescaped; `$XDG_DATA_HOME/fish/fish_history`) history. zsh metafies bytes 0x83–0xa2 (e.g. Cyrillic у, ф, х): `0x83` followed by the byte XOR 0x20, undone by `unmetafy`; without it Russian commands come out garbled
 - `history.Recent` keeps the latest occurrence of each command and drops noise (`Interesting`: bare trivial commands, `cd`, `mem`, `git status`…)
 - Selection syntax (`parseSelection`): commas separate memories, spaces/ranges group commands into one. Titles are suggested by the `--llm` model with the user's last 5 titles as style examples (`titlePrompt` / `cleanTitle`); the first LLM error turns suggestions off for the run. Memories are saved with source `remember`, duplicates skipped, then indexed with `indexAll`. Interactive only
 
@@ -102,9 +103,9 @@ When changing embedding models, a full reindex is required — set `needs_reinde
 `mem reindex --model <name>` probes the model's dimensions, calls `ActivateEmbeddingConfig` (deactivates others, flags all rows stale), drops and recreates the LanceDB table, then re-embeds. Rows are flagged before vectors are dropped, so an interrupted reindex resumes on the next run. Opening the vector store with the wrong dimensions returns `vector.ErrDimsMismatch`.
 
 ### Watch sessions
-- `mem watch` starts `$SHELL` (bash or zsh) with a generated rc file that sources the user's config and appends each command to `~/.mem/sessions/<timestamp>.session`, NUL-terminated (multi-line safe); `MEM_SESSION` holds the path
-- bash records from `PROMPT_COMMAND` via `history 1`; zsh from a `preexec` hook. Both skip space-prefixed commands when the shell ignores them for history
-- `mem remember` inside the shell reads `MEM_SESSION` and truncates it after saving; outside it uses the newest session file and deletes it. `session.Clean` first splits multi-line records into per-line commands with `mvdan.cc/sh` (zsh runs a pasted block as one line; loops, `\` continuations and heredocs stay whole), then drops `mem` invocations, `exit`, blanks and consecutive duplicates
+- `mem watch` starts `$SHELL` (bash, zsh or fish) with a generated rc file that sources the user's config and appends each command to `~/.mem/sessions/<timestamp>.<shell>.session`, NUL-terminated (multi-line safe); `MEM_SESSION` holds the path. `ShellOf` reads the shell back from the name (files from before have none)
+- bash records from `PROMPT_COMMAND` via `history 1`; zsh from a `preexec` hook; fish from a `fish_preexec` event function passed with `fish -C` (runs after config.fish). bash and zsh skip space-prefixed commands when the shell ignores them for history, fish always does
+- `mem remember` inside the shell reads `MEM_SESSION` and truncates it after saving; outside it uses the newest session file and deletes it. `session.Clean` first splits multi-line records into per-line commands (zsh and fish run a pasted block as one line): with `mvdan.cc/sh` for bash/zsh (loops, `\` continuations and heredocs stay whole), with `splitFish` for fish (tracks `begin`/`if`/`for`/`while`/`function`/`switch` … `end`, quotes, `(…)`, `\` and trailing pipes; `and`/`or` lines join the previous command). Then it drops `mem` invocations, `exit`, blanks and consecutive duplicates
 
 ## SQLite schema (current)
 
@@ -133,7 +134,6 @@ Key constraints:
 ## What's not built yet
 
 - Capturing command output in `mem watch` (`commands.output` column is unused, though export/import already carry it)
-- Shells other than bash/zsh for `mem watch`
 
 ## Running locally
 

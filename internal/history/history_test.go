@@ -1,6 +1,7 @@
 package history
 
 import (
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -29,6 +30,37 @@ func TestParsePlainAndBash(t *testing.T) {
 	want := []string{"git log --oneline", "docker ps -a", "kubectl get pods", ": not a header"}
 	if got := Parse(data); !reflect.DeepEqual(got, want) {
 		t.Errorf("Parse = %q, want %q", got, want)
+	}
+}
+
+func TestParseFish(t *testing.T) {
+	// As written by fish 3.7: `echo 'a\\b'` stores each backslash doubled,
+	// newlines become \n, and entries may carry a paths list.
+	data := []byte("- cmd: echo 'a\\\\\\\\b' привет\n  when: 1792488812\n" +
+		"- cmd: for i in 1 2\\n  echo $i\\nend\n  when: 1792488813\n" +
+		"- cmd: cat notes.txt\n  when: 1792488814\n  paths:\n    - notes.txt\n")
+	want := []string{
+		`echo 'a\\b' привет`,
+		"for i in 1 2\n  echo $i\nend",
+		"cat notes.txt",
+	}
+	if got := Parse(data); !reflect.DeepEqual(got, want) {
+		t.Errorf("Parse =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestDefaultFileFish(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("HISTFILE", "")
+	t.Setenv("SHELL", "/opt/homebrew/bin/fish")
+	t.Setenv("XDG_DATA_HOME", "")
+	if got, _ := DefaultFile(); got != filepath.Join(home, ".local/share/fish/fish_history") {
+		t.Errorf("DefaultFile = %q", got)
+	}
+	t.Setenv("XDG_DATA_HOME", "/data")
+	if got, _ := DefaultFile(); got != "/data/fish/fish_history" {
+		t.Errorf("DefaultFile with XDG_DATA_HOME = %q", got)
 	}
 }
 

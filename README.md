@@ -86,10 +86,12 @@ The default embedding model is `bge-m3`, which handles English and Russian in on
 
 ### Shell widget
 
-Add one line to `~/.zshrc` (or `eval "$(mem init bash)"` to `~/.bashrc`):
+Add one line to your shell config:
 
 ```bash
-eval "$(mem init zsh)"
+eval "$(mem init zsh)"     # ~/.zshrc
+eval "$(mem init bash)"    # ~/.bashrc
+mem init fish | source     # ~/.config/fish/config.fish
 ```
 
 Then type a question on the command line and press **Ctrl+G**: the line is replaced with the best matching command, ready to edit or run. If the memory has several commands, mem asks which one. Choose another key with `mem init zsh --key '^[m'` (Alt+M).
@@ -104,18 +106,18 @@ After upgrading, `mem ask` may report memories that are not indexed with the cur
 |---|---|
 | `mem save "title" -c "cmd" [-c ...] [-t tag] [-d "description"] [--force]` | Save commands/notes as a memory. An exact copy of an existing memory (same title and commands) is refused unless `--force` |
 | `mem ask "question" [-n 5] [--min-score 0.45] [--answer] [--llm llama3.2] [--copy] [--run]` | Hybrid search: semantic similarity plus exact keywords (error codes, flags, service names). Each result shows its similarity (0–1) and `keyword` if words matched; weak semantic matches are hidden (the default threshold is tuned per embedding model; `--min-score 0` shows everything). Without Ollama it falls back to keyword matches. `--answer` also asks a local LLM to summarize the results. `--copy` puts the top result's command on the clipboard and `--run` runs it after a y/N confirmation (asks which one if it has several) |
-| `mem watch [--shell bash\|zsh]` | Start a recorded subshell; every command is logged until `exit` |
+| `mem watch [--shell bash\|zsh\|fish]` | Start a recorded subshell; every command is logged until `exit` |
 | `mem remember "title" [-t tag] [-d "..."] [-n N]` | Turn the recorded session (or its last N commands) into a memory. Works inside the watched shell too |
 | `mem list [-t tag] [-n 20]` | List recent memories |
 | `mem show <id>` / `mem delete <id>...` | Inspect a memory, or remove one or more |
 | `mem edit <id> [--title ...] [-d ...] [-c ...] [-t ...]` | Change a memory with flags (`-c` / `-t` replace all commands / tags), or without flags in `$EDITOR`. The memory is re-indexed |
 | `mem reindex [--all] [--model name]` | Embed memories saved while Ollama was down, rebuild the index, or switch embedding model |
-| `mem init zsh\|bash [--key ^G]` | Print the shell widget (see below) |
+| `mem init zsh\|bash\|fish [--key ^G]` | Print the shell widget (see below) |
 | `mem export [--format json\|md] [-o file]` | Back up all memories as JSON, or write them as readable Markdown |
 | `mem import <file.json\|->` | Restore a JSON export: keeps dates, skips memories already present (`--force` to import anyway), indexes them |
-| `mem import --history [-n 30] [-t tag]` | Pick commands from your zsh/bash history: `3, 7-9` saves command 3 as one memory and 7–9 as another; a local LLM suggests each title (`--no-suggest` to turn off) |
+| `mem import --history [-n 30] [-t tag]` | Pick commands from your zsh, bash or fish history: `3, 7-9` saves command 3 as one memory and 7–9 as another; a local LLM suggests each title (`--no-suggest` to turn off) |
 
-Commands starting with a space are not recorded by `mem watch` if your shell ignores them for history (`HISTCONTROL=ignorespace` in bash, `setopt HIST_IGNORE_SPACE` in zsh).
+Commands starting with a space are not recorded by `mem watch` if your shell ignores them for history (`HISTCONTROL=ignorespace` in bash, `setopt HIST_IGNORE_SPACE` in zsh; fish always skips them).
 
 ---
 
