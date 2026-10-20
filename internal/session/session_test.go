@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -16,12 +17,12 @@ func TestCreateAndLatest(t *testing.T) {
 		t.Fatalf("Latest on empty dir: err = %v, want ErrNoSession", err)
 	}
 
-	first, err := Create(dir)
+	first, err := Create(dir, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	time.Sleep(time.Millisecond)
-	second, err := Create(dir)
+	second, err := Create(dir, "fish")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -35,6 +36,9 @@ func TestCreateAndLatest(t *testing.T) {
 	}
 	if latest != second {
 		t.Errorf("Latest = %s, want %s", latest, second)
+	}
+	if ShellOf(first) != "" || ShellOf(second) != "fish" {
+		t.Errorf("ShellOf = %q, %q; want \"\", fish", ShellOf(first), ShellOf(second))
 	}
 }
 
@@ -74,7 +78,7 @@ func TestClean(t *testing.T) {
 		"ssh prod",
 	}
 	want := []string{"ssh prod", "journalctl -u api -n 100", "systemctl restart api", "ssh prod"}
-	if got := Clean(in); !reflect.DeepEqual(got, want) {
+	if got := Clean(in, "zsh"); !reflect.DeepEqual(got, want) {
 		t.Errorf("Clean = %q, want %q", got, want)
 	}
 }
@@ -82,6 +86,19 @@ func TestClean(t *testing.T) {
 func TestNewShellUnsupported(t *testing.T) {
 	if _, err := NewShell("sh", "/tmp/x"); err == nil {
 		t.Error("NewShell(sh) succeeded, want unsupported shell error")
+	}
+}
+
+func TestNewShellFish(t *testing.T) {
+	sh, err := NewShell("fish", "/tmp/x.fish.session")
+	if err != nil {
+		t.Skipf("fish not available: %v", err)
+	}
+	defer sh.Cleanup()
+
+	args := sh.Cmd().Args
+	if sh.Name != "fish" || len(args) != 4 || args[2] != "-C" || !strings.Contains(args[3], "fish_preexec") {
+		t.Errorf("fish shell = %q %q", sh.Name, args)
 	}
 }
 
@@ -110,7 +127,7 @@ func TestCleanSplitsPastedBlock(t *testing.T) {
 	// zsh runs a pasted block as a single line, so preexec sees all of it.
 	in := []string{"ls -la\ndu -sh * | sort -h\n./mem remember \"тест\"\nexit"}
 	want := []string{"ls -la", "du -sh * | sort -h"}
-	if got := Clean(in); !reflect.DeepEqual(got, want) {
+	if got := Clean(in, "zsh"); !reflect.DeepEqual(got, want) {
 		t.Errorf("Clean = %q, want %q", got, want)
 	}
 }
@@ -134,7 +151,50 @@ func TestCleanKeepsMultiLineConstructs(t *testing.T) {
 		"./bin/app",
 		"if [ -f x ]; then\n  echo 'unterminated",
 	}
-	if got := Clean(in); !reflect.DeepEqual(got, want) {
+	if got := Clean(in, "zsh"); !reflect.DeepEqual(got, want) {
+		t.Errorf("Clean =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestCleanFish(t *testing.T) {
+	in := []string{
+		// A pasted block: fish runs it as one command line.
+		"git pull\nmake build\nmem remember \"сборка\"",
+		"for f in *.log\n    gzip $f\nend",
+		"if test -f .env\n    source .env\nelse if test -f .env.example\n    cp .env.example .env\nelse\n    echo none\nend\nls -a",
+		"function mkcd\n    mkdir -p $argv[1]; and cd $argv[1]\nend",
+		"begin\n    echo a\n    echo b\nend > out.txt\ncat out.txt",
+		"make test\nand make install\nor echo failed",
+		"docker run \\\n    --rm alpine",
+		"cat file |\n    grep error",
+		"echo 'one\ntwo'\necho (date\n)",
+		"switch $os\n    case Darwin\n        brew update\nend",
+		"sleep 5 &\njobs",
+		"# comment\necho x#y\n",
+		"while true; sleep 1; end\necho done",
+	}
+	want := []string{
+		"git pull",
+		"make build",
+		"for f in *.log\n    gzip $f\nend",
+		"if test -f .env\n    source .env\nelse if test -f .env.example\n    cp .env.example .env\nelse\n    echo none\nend",
+		"ls -a",
+		"function mkcd\n    mkdir -p $argv[1]; and cd $argv[1]\nend",
+		"begin\n    echo a\n    echo b\nend > out.txt",
+		"cat out.txt",
+		"make test\nand make install\nor echo failed",
+		"docker run \\\n    --rm alpine",
+		"cat file |\n    grep error",
+		"echo 'one\ntwo'",
+		"echo (date\n)",
+		"switch $os\n    case Darwin\n        brew update\nend",
+		"sleep 5 &",
+		"jobs",
+		"echo x#y",
+		"while true; sleep 1; end",
+		"echo done",
+	}
+	if got := Clean(in, "fish"); !reflect.DeepEqual(got, want) {
 		t.Errorf("Clean =\n%q\nwant\n%q", got, want)
 	}
 }

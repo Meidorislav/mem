@@ -23,9 +23,10 @@ var watchCmd = &cobra.Command{
 	Short: "Record terminal session",
 	Long: `Start a recorded subshell. Every command you run is logged until you exit;
 then turn the session into a memory with ` + "`mem remember \"title\"`" + ` (also works
-from inside the watched shell). Commands starting with a space are skipped
-when your shell ignores them for history (HISTCONTROL=ignorespace in bash,
-setopt HIST_IGNORE_SPACE in zsh).`,
+from inside the watched shell). Works with bash, zsh and fish. Commands
+starting with a space are skipped when your shell ignores them for history
+(HISTCONTROL=ignorespace in bash, setopt HIST_IGNORE_SPACE in zsh, always in
+fish).`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if path := os.Getenv(session.EnvVar); path != "" {
@@ -36,7 +37,11 @@ setopt HIST_IGNORE_SPACE in zsh).`,
 		if err != nil {
 			return err
 		}
-		path, err := session.Create(dir)
+		_, shell, err := session.ResolveShell(watchFlags.shell)
+		if err != nil {
+			return err
+		}
+		path, err := session.Create(dir, shell)
 		if err != nil {
 			return err
 		}
@@ -68,7 +73,7 @@ setopt HIST_IGNORE_SPACE in zsh).`,
 		if err != nil && !errors.Is(err, session.ErrNoSession) {
 			return err
 		}
-		cmds := session.Clean(raw)
+		cmds := session.Clean(raw, shell)
 		if len(cmds) == 0 {
 			os.Remove(path)
 			fmt.Println("Session ended; nothing left to remember.")
@@ -113,7 +118,7 @@ finished session and removes it once saved.`,
 		if err != nil {
 			return err
 		}
-		cmds := session.Clean(raw)
+		cmds := session.Clean(raw, session.ShellOf(path))
 		if n := rememberFlags.last; n > 0 && len(cmds) > n {
 			cmds = cmds[len(cmds)-n:]
 		}
@@ -168,7 +173,7 @@ finished session and removes it once saved.`,
 }
 
 func init() {
-	watchCmd.Flags().StringVar(&watchFlags.shell, "shell", "", "shell to record (bash or zsh; default $SHELL)")
+	watchCmd.Flags().StringVar(&watchFlags.shell, "shell", "", "shell to record (bash, zsh or fish; default $SHELL)")
 
 	rememberCmd.Flags().StringArrayVarP(&rememberFlags.tags, "tag", "t", nil, "tag to assign")
 	rememberCmd.Flags().StringVarP(&rememberFlags.description, "description", "d", "", "longer description of the memory")

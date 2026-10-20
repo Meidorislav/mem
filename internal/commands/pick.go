@@ -27,6 +27,28 @@ func stdinIsTerminal() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
+// cookedTerminal makes the terminal on stdin echo input and end lines on
+// Enter while mem asks a question, and returns a func restoring the old
+// settings. Shell widgets run mem with the line editor's raw mode still on
+// (fish bindings, bash `bind -x`), where an answer would never arrive.
+func cookedTerminal() (restore func()) {
+	saved, err := stty("-g")
+	if err != nil {
+		return func() {}
+	}
+	if _, err := stty("icanon", "icrnl", "echo"); err != nil {
+		return func() {}
+	}
+	return func() { stty(saved) }
+}
+
+func stty(args ...string) (string, error) {
+	cmd := exec.Command("stty", args...)
+	cmd.Stdin = os.Stdin
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+
 // chooseCommands picks commands from m: the only one, or the user's choice
 // when there are several. Without an interactive stdin it takes them all.
 func chooseCommands(m storage.Memory, in *bufio.Reader, out io.Writer, interactive bool) ([]string, error) {
@@ -135,6 +157,9 @@ func useResult(m storage.Memory, copyIt, runIt bool) error {
 		return errors.New("--run needs an interactive terminal to confirm the command")
 	}
 
+	if interactive && (runIt || len(m.Commands) > 1) {
+		defer cookedTerminal()()
+	}
 	in := bufio.NewReader(os.Stdin)
 	cmds, err := chooseCommands(m, in, os.Stdout, interactive)
 	if errors.Is(err, errCancelled) {
@@ -174,7 +199,11 @@ func useResult(m storage.Memory, copyIt, runIt bool) error {
 // else, for `ask --print`: the shell widget puts stdout on the command
 // line, while prompts go to stderr, i.e. the terminal.
 func printResult(m storage.Memory) error {
-	cmds, err := chooseCommands(m, bufio.NewReader(os.Stdin), os.Stderr, stdinIsTerminal())
+	interactive := stdinIsTerminal()
+	if interactive && len(m.Commands) > 1 {
+		defer cookedTerminal()()
+	}
+	cmds, err := chooseCommands(m, bufio.NewReader(os.Stdin), os.Stderr, interactive)
 	if err != nil {
 		return err
 	}

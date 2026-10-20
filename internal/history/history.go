@@ -1,4 +1,4 @@
-// Package history reads shell history files (zsh and bash) for
+// Package history reads shell history files (zsh, bash and fish) for
 // `mem import --history`.
 package history
 
@@ -12,7 +12,7 @@ import (
 
 // DefaultFile picks the history file to read: $HISTFILE when exported,
 // else the default file of the user's $SHELL, else whichever of
-// ~/.zsh_history and ~/.bash_history exists.
+// ~/.zsh_history, ~/.bash_history and fish's history exists.
 func DefaultFile() (string, error) {
 	if f := os.Getenv("HISTFILE"); f != "" {
 		return f, nil
@@ -23,18 +23,31 @@ func DefaultFile() (string, error) {
 	}
 	zsh := filepath.Join(home, ".zsh_history")
 	bash := filepath.Join(home, ".bash_history")
+	fish := fishFile(home)
 	switch filepath.Base(os.Getenv("SHELL")) {
 	case "zsh":
 		return zsh, nil
 	case "bash":
 		return bash, nil
+	case "fish":
+		return fish, nil
 	}
-	for _, f := range []string{zsh, bash} {
+	for _, f := range []string{zsh, bash, fish} {
 		if _, err := os.Stat(f); err == nil {
 			return f, nil
 		}
 	}
-	return "", fmt.Errorf("no shell history found (looked for %s and %s); pass --file", zsh, bash)
+	return "", fmt.Errorf("no shell history found (looked for %s, %s and %s); pass --file", zsh, bash, fish)
+}
+
+// fishFile is where fish keeps its history: $XDG_DATA_HOME/fish, else
+// ~/.local/share/fish.
+func fishFile(home string) string {
+	data := os.Getenv("XDG_DATA_HOME")
+	if data == "" {
+		data = filepath.Join(home, ".local", "share")
+	}
+	return filepath.Join(data, "fish", "fish_history")
 }
 
 // Read returns the commands in a history file, oldest first.
@@ -51,10 +64,13 @@ func Read(path string) ([]string, error) {
 // for Cyrillic letters such as у, ф, х.
 const zshMeta = 0x83
 
-// Parse reads zsh (plain or extended `: <time>:<duration>;cmd`) and bash
-// (with optional `#<time>` lines) history. In zsh files a line ending with
-// a backslash continues on the next line.
+// Parse reads zsh (plain or extended `: <time>:<duration>;cmd`), bash
+// (with optional `#<time>` lines) and fish history. In zsh files a line
+// ending with a backslash continues on the next line.
 func Parse(data []byte) []string {
+	if isFish(data) {
+		return parseFish(data)
+	}
 	data = unmetafy(data)
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 
@@ -84,6 +100,51 @@ func Parse(data []byte) []string {
 	}
 	flush()
 	return cmds
+}
+
+// fishCmd starts an entry in fish's YAML-like history; `when:` and
+// `paths:` lines follow it.
+const fishCmd = "- cmd: "
+
+func isFish(data []byte) bool {
+	return bytes.HasPrefix(bytes.TrimLeft(data, "\n"), []byte(fishCmd))
+}
+
+func parseFish(data []byte) []string {
+	var cmds []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if rest, ok := strings.CutPrefix(line, fishCmd); ok {
+			if c := strings.TrimSpace(unescapeFish(rest)); c != "" {
+				cmds = append(cmds, c)
+			}
+		}
+	}
+	return cmds
+}
+
+// unescapeFish undoes fish's history escaping: `\\` for a backslash and
+// `\n` for a newline.
+func unescapeFish(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+	var sb strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case '\\':
+				sb.WriteByte('\\')
+				i++
+				continue
+			case 'n':
+				sb.WriteByte('\n')
+				i++
+				continue
+			}
+		}
+		sb.WriteByte(s[i])
+	}
+	return sb.String()
 }
 
 func unmetafy(data []byte) []byte {
