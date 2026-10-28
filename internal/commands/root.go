@@ -112,6 +112,7 @@ var askFlags struct {
 	copy     bool
 	run      bool
 	print    bool
+	output   bool
 }
 
 var askCmd = &cobra.Command{
@@ -203,7 +204,7 @@ var askCmd = &cobra.Command{
 			fmt.Print("\n\nSources:\n")
 		}
 
-		fmt.Println(formatSearchResults(memories, notes))
+		fmt.Println(formatResults(memories, notes, askFlags.output))
 
 		if askFlags.copy || askFlags.run {
 			return useResult(memories[0], askFlags.copy, askFlags.run)
@@ -278,6 +279,9 @@ var showCmd = &cobra.Command{
 			fmt.Println("Commands:")
 			for _, cmd := range m.Commands {
 				fmt.Printf("  $ %s\n", cmd.Command)
+				if cmd.Output != nil {
+					fmt.Println(indentOutput(*cmd.Output, "    │ "))
+				}
 			}
 		}
 
@@ -390,6 +394,12 @@ func plural(n int, one, many string) string {
 // formatSearchResults renders memories as a numbered list. notes, when
 // non-nil, adds an annotation such as the similarity to the query.
 func formatSearchResults(memories []storage.Memory, notes map[int64]string) string {
+	return formatResults(memories, notes, false)
+}
+
+// formatResults is formatSearchResults, optionally with each command's
+// recorded output under it.
+func formatResults(memories []storage.Memory, notes map[int64]string, withOutput bool) string {
 	if len(memories) == 0 {
 		return "No matching memories found."
 	}
@@ -417,9 +427,18 @@ func formatSearchResults(memories []storage.Memory, notes map[int64]string) stri
 			sb.WriteString("\n   $ ")
 			// Keep continuation lines of multi-line commands under the "$".
 			sb.WriteString(strings.ReplaceAll(cmd.Command, "\n", "\n     "))
+			if withOutput && cmd.Output != nil {
+				sb.WriteString("\n")
+				sb.WriteString(indentOutput(*cmd.Output, "   │ "))
+			}
 		}
 	}
 	return sb.String()
+}
+
+// indentOutput prefixes every line of a command's output with prefix.
+func indentOutput(out, prefix string) string {
+	return prefix + strings.ReplaceAll(out, "\n", "\n"+prefix)
 }
 
 func init() {
@@ -434,6 +453,7 @@ func init() {
 	askCmd.Flags().StringVar(&askFlags.llm, "llm", "llama3.2", "Ollama model used by --answer")
 	askCmd.Flags().BoolVar(&askFlags.copy, "copy", false, "copy the top result's command to the clipboard (asks which one if there are several)")
 	askCmd.Flags().BoolVar(&askFlags.run, "run", false, "run the top result's command after confirmation")
+	askCmd.Flags().BoolVar(&askFlags.output, "output", false, "show the recorded output of each command")
 	askCmd.Flags().BoolVar(&askFlags.print, "print", false, "print only the top result's command (for shell widgets, see `mem init`)")
 
 	listCmd.Flags().StringVarP(&listFlags.tag, "tag", "t", "", "filter by tag")

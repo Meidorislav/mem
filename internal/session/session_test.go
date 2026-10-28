@@ -96,7 +96,7 @@ func TestNewShellFish(t *testing.T) {
 	}
 	defer sh.Cleanup()
 
-	args := sh.Cmd().Args
+	args := sh.cmd.Args
 	if sh.Name != "fish" || len(args) != 4 || args[2] != "-C" || !strings.Contains(args[3], "fish_preexec") {
 		t.Errorf("fish shell = %q %q", sh.Name, args)
 	}
@@ -113,7 +113,7 @@ func TestNewShellBash(t *testing.T) {
 		t.Errorf("Name = %q, want bash", sh.Name)
 	}
 	found := false
-	for _, kv := range sh.Cmd().Env {
+	for _, kv := range sh.cmd.Env {
 		if kv == EnvVar+"=/tmp/x.session" {
 			found = true
 		}

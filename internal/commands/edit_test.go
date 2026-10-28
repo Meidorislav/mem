@@ -82,3 +82,22 @@ func TestFormatForEditShowsHelp(t *testing.T) {
 		t.Errorf("unexpected template:\n%s", out)
 	}
 }
+
+func TestKeepOutputs(t *testing.T) {
+	a, b := "out a", "out b"
+	old := []storage.Command{{Command: "ls", Output: &a}, {Command: "ls", Output: &b}, {Command: "pwd"}}
+	edited := []storage.Command{{Command: "pwd"}, {Command: "ls"}, {Command: "ls"}, {Command: "ls"}, {Command: "new"}}
+	keepOutputs(old, edited)
+
+	var got []string
+	for _, c := range edited {
+		if c.Output == nil {
+			got = append(got, "-")
+		} else {
+			got = append(got, *c.Output)
+		}
+	}
+	if want := []string{"-", "out a", "out b", "-", "-"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("outputs = %q, want %q", got, want)
+	}
+}

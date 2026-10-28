@@ -55,6 +55,7 @@ docs/i18n/ru/     # Russian docs
 - Prepend title + tags as context: `"<command> | note: <title> | tags: <tag1>, <tag2>"`
 - Keep chunks under ~400 tokens (well within the models' context limits)
 - Store `chunk_index` in `embedding_status` for multi-chunk notes
+- A command chunk also carries the last 3 non-empty lines of its output (`outputStr`, capped at 240 runes): `<command> | output: <tail> | note: ...`. Full output is only in the keyword index. Existing memories have no output, so their chunk text and hashes did not change and `Scheme` was not bumped
 - A memory with a description (or no commands) also gets a context chunk with `command_id = NULL`
 - LanceDB rows only carry `memory_id`, so re-indexing replaces *all* vectors of a memory (`indexer.go`); embed first, then delete + insert, so an Ollama failure keeps old vectors
 - `embedding_status` upserts match on `command_id IS ?` — SQLite treats NULLs as distinct in UNIQUE, so `ON CONFLICT` would duplicate context-chunk rows
@@ -67,10 +68,10 @@ docs/i18n/ru/     # Russian docs
 - Ollama errors go through `ollama.RequestError` / `ollama.StatusError` so the user sees "not running at <url>: start it with `ollama serve`" or "run `ollama pull <model>`" instead of raw dial errors
 
 ### Keyword search (hybrid)
-- `memory_fts` (SQLite FTS5, `unicode61 remove_diacritics 2`, rowid = memory id) indexes title, description, tags and commands. `SaveMemory` inserts the row in its transaction; the `memories_fts_delete` trigger removes it; `NewStoreAt` backfills missing rows (`syncFTS`). `UpdateMemory` (used by `mem edit`) rewrites the row; anything else that changes a memory's text must too
+- `memory_fts` (SQLite FTS5, `unicode61 remove_diacritics 2`, rowid = memory id) indexes title, description, tags, commands and command output. `SaveMemory` inserts the row in its transaction; the `memories_fts_delete` trigger removes it; `NewStoreAt` backfills missing rows (`syncFTS`). `UpdateMemory` (used by `mem edit`) rewrites the row; anything else that changes a memory's text must too
 - Stemming (Snowball via `github.com/kljensen/snowball`, Russian for Cyrillic words, English for Latin): `ftsText` stores each word plus its stem when different (ё folded to е), and `ftsQuery` searches stems. Rows are built in Go (`insertFTS`), not SQL
-- `ftsQuery` turns the question into quoted stemmed terms OR-ed together (`"nginx"* OR "502" OR "ошибк"*`), dropping en/ru stop words, so user text can't inject FTS syntax. Only terms of `minPrefixLen` (4) letters or more are prefix-matched; shorter stems match whole words, otherwise `"лог"*` hits "логическую". Results are ranked by `bm25` with title/tags/commands weighted above description
-- `PRAGMA user_version` holds `ftsVersion`; when it is lower, `syncFTS` rebuilds the whole index on open. Bump `ftsVersion` whenever `ftsText` changes
+- `ftsQuery` turns the question into quoted stemmed terms OR-ed together (`"nginx"* OR "502" OR "ошибк"*`), dropping en/ru stop words, so user text can't inject FTS syntax. Only terms of `minPrefixLen` (4) letters or more are prefix-matched; shorter stems match whole words, otherwise `"лог"*` hits "логическую". Results are ranked by `bm25` with title/tags/commands weighted above description and output weighted lowest
+- `PRAGMA user_version` holds `ftsVersion`; when it is lower, `syncFTS` rebuilds the whole index on open. Bump `ftsVersion` whenever `ftsText` or the table columns change (`syncFTS` then drops and recreates `memory_fts`; `ftsTable` holds the DDL)
 - `fuse` (`commands/rank.go`) merges `rankHits` output with keyword hits by reciprocal rank fusion (k = 60): memories found by both rank first, and keyword hits are shown even below `--min-score`. If embedding the query fails, `ask` falls back to keyword results with a warning
 
 ### Using results (`ask --copy` / `--run`)
@@ -105,6 +106,7 @@ When changing embedding models, a full reindex is required — set `needs_reinde
 ### Watch sessions
 - `mem watch` starts `$SHELL` (bash, zsh or fish) with a generated rc file that sources the user's config and appends each command to `~/.mem/sessions/<timestamp>.<shell>.session`, NUL-terminated (multi-line safe); `MEM_SESSION` holds the path. `ShellOf` reads the shell back from the name (files from before have none)
 - bash records from `PROMPT_COMMAND` via `history 1`; zsh from a `preexec` hook; fish from a `fish_preexec` event function passed with `fish -C` (runs after config.fish). bash and zsh skip space-prefixed commands when the shell ignores them for history, fish always does
+- Output capture: unless `--no-output` (or stdin is not a terminal), `Shell.RunCaptured` runs the shell on a pty (`creack/pty`), puts the terminal in raw mode and copies bytes both ways through a `Recorder`. The hooks print invisible OSC markers (`ESC ] 777;mem;start|end|skip BEL`, only when `MEM_CAPTURE` is set): zsh/fish print `start` from preexec (after the record, so skipped commands print none) and `end` from precmd/`fish_postexec`; bash prints `start` from `PS0` (bash 4.4+) and `end`/`skip` from `PROMPT_COMMAND` right after writing the record. The `Recorder` strips markers (even split across reads), collects the bytes between `start` and `end`, drops commands that used the alternate screen (`ESC[?1049h`), and appends `\x01<output>` NUL-terminated to the session file with `O_APPEND`. An output record belongs to the command record before it; one with no command before it (the file was truncated by `mem remember` while the command ran) is dropped by `ReadEntries`. Output goes through `ProcessOutput` before it reaches the disk: `CleanOutput` (ANSI, `\r` rewrites, backspaces), `Redact` (token/password patterns, private keys, URL passwords) and `TrimOutput` (first 20 + last 20 lines, 500 runes per line, 8 KiB). Extend `secretPatterns` when a new credential format shows up. `CleanEntries` keeps output with its command (a split record gives it to the last piece; of consecutive duplicates the latest wins). `mem edit` re-attaches outputs to unchanged commands (`keepOutputs`); `mem show` and `mem ask --output` print them
 - `mem remember` inside the shell reads `MEM_SESSION` and truncates it after saving; outside it uses the newest session file and deletes it. `session.Clean` first splits multi-line records into per-line commands (zsh and fish run a pasted block as one line): with `mvdan.cc/sh` for bash/zsh (loops, `\` continuations and heredocs stay whole), with `splitFish` for fish (tracks `begin`/`if`/`for`/`while`/`function`/`switch` … `end`, quotes, `(…)`, `\` and trailing pipes; `and`/`or` lines join the previous command). Then it drops `mem` invocations, `exit`, blanks and consecutive duplicates
 
 ## SQLite schema (current)
@@ -133,7 +135,7 @@ Key constraints:
 
 ## What's not built yet
 
-- Capturing command output in `mem watch` (`commands.output` column is unused, though export/import already carry it)
+- Output capture is only tested against bash; the zsh and fish hooks are written but were not run in CI. Output of commands in a background job or run over `ssh` into a full-screen UI is not captured
 
 ## Running locally
 

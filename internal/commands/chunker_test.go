@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/meidori/mem/internal/storage"
@@ -61,5 +62,34 @@ func TestChunkMemoryNoCommands(t *testing.T) {
 	expectedContext := "context | note: Empty note"
 	if chunks[0].Text != expectedContext {
 		t.Errorf("expected context %q, got %q", expectedContext, chunks[0].Text)
+	}
+}
+
+func TestChunkMemoryOutputTail(t *testing.T) {
+	out := "line 1\nline 2\n\nline 3\nerror: connection refused\n\n"
+	empty := "  \n"
+	m := &storage.Memory{
+		Title: "db check",
+		Commands: []storage.Command{
+			{ID: 1, Command: "psql -h db", Output: &out},
+			{ID: 2, Command: "uptime", Output: &empty},
+			{ID: 3, Command: "ls"},
+		},
+	}
+	chunks := ChunkMemory(m)
+	want := []string{
+		"psql -h db | output: line 2 / line 3 / error: connection refused | note: db check",
+		"uptime | note: db check",
+		"ls | note: db check",
+	}
+	for i, w := range want {
+		if chunks[i].Text != w {
+			t.Errorf("chunk %d = %q, want %q", i, chunks[i].Text, w)
+		}
+	}
+
+	long := strings.Repeat("x", 1000)
+	if got := outputStr(&long); len([]rune(got)) > len(" | output: ")+outputTailRunes+1 {
+		t.Errorf("tail not capped: %d runes", len([]rune(got)))
 	}
 }
