@@ -2,8 +2,10 @@ package session
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -106,8 +108,19 @@ func TestRecorderLongOutputKeepsEnds(t *testing.T) {
 }
 
 func TestRunCapturedBash(t *testing.T) {
-	if _, err := os.Stat("/bin/bash"); err != nil {
+	bash, _, err := ResolveShell("bash")
+	if err != nil {
 		t.Skip("bash not available")
+	}
+	// Output capture needs PS0, added in bash 4.4 (macOS ships 3.2).
+	ver, err := exec.Command(bash, "-c", `echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"`).Output()
+	if err != nil {
+		t.Skipf("bash version: %v", err)
+	}
+	var major, minor int
+	fmt.Sscanf(string(ver), "%d.%d", &major, &minor)
+	if major < 4 || (major == 4 && minor < 4) {
+		t.Skipf("bash %d.%d has no PS0", major, minor)
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
