@@ -48,6 +48,8 @@ The memory is re-indexed after the change.`,
 			return err
 		}
 
+		oldCommands := m.Commands
+
 		flags := cmd.Flags()
 		if flags.Changed("title") || flags.Changed("description") || flags.Changed("command") || flags.Changed("tag") {
 			if flags.Changed("title") {
@@ -80,6 +82,7 @@ The memory is re-indexed after the change.`,
 		if m.Title == "" {
 			return errors.New("title cannot be empty")
 		}
+		keepOutputs(oldCommands, m.Commands)
 		if err := store.UpdateMemory(m); err != nil {
 			return fmt.Errorf("updating memory: %w", err)
 		}
@@ -88,6 +91,22 @@ The memory is re-indexed after the change.`,
 		warnIfNotIndexed(store, m)
 		return nil
 	},
+}
+
+// keepOutputs gives commands that were already there (same text) their
+// recorded output back: the editor shows only the commands, so UpdateMemory
+// would otherwise drop it. Each old command is used once.
+func keepOutputs(old, edited []storage.Command) {
+	used := make([]bool, len(old))
+	for i := range edited {
+		for j, o := range old {
+			if !used[j] && o.Output != nil && o.Command == edited[i].Command {
+				used[j] = true
+				edited[i].Output = o.Output
+				break
+			}
+		}
+	}
 }
 
 // editInEditor opens m in the user's editor and returns the edited memory,

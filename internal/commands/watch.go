@@ -12,10 +12,12 @@ import (
 	"github.com/meidori/mem/internal/session"
 	"github.com/meidori/mem/internal/storage"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var watchFlags struct {
-	shell string
+	shell    string
+	noOutput bool
 }
 
 var watchCmd = &cobra.Command{
@@ -26,7 +28,12 @@ then turn the session into a memory with ` + "`mem remember \"title\"`" + ` (als
 from inside the watched shell). Works with bash, zsh and fish. Commands
 starting with a space are skipped when your shell ignores them for history
 (HISTCONTROL=ignorespace in bash, setopt HIST_IGNORE_SPACE in zsh, always in
-fish).`,
+fish).
+
+The output of each command is recorded too (colors and progress bars
+stripped, long output shortened, tokens and passwords replaced with
+[redacted]) and saved with the commands by ` + "`mem remember`" + `. Full-screen programs
+such as vim are not captured. Use --no-output to record commands only.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if path := os.Getenv(session.EnvVar); path != "" {
@@ -60,8 +67,14 @@ fish).`,
 		signal.Notify(sigs, os.Interrupt, syscall.SIGQUIT)
 		defer signal.Stop(sigs)
 
+		capture := !watchFlags.noOutput && term.IsTerminal(int(os.Stdin.Fd()))
 		fmt.Printf("Recording %s session. Run `mem remember \"title\"` to save it, `exit` to stop.\n", sh.Name)
-		if err := sh.Cmd().Run(); err != nil {
+		if capture {
+			err = sh.RunCaptured(os.Stdin, os.Stdout, path)
+		} else {
+			err = sh.Run()
+		}
+		if err != nil {
 			// A non-zero exit just reflects the last command in the shell.
 			var exitErr *exec.ExitError
 			if !errors.As(err, &exitErr) {
@@ -69,11 +82,11 @@ fish).`,
 			}
 		}
 
-		raw, err := session.Read(path)
+		raw, err := session.ReadEntries(path)
 		if err != nil && !errors.Is(err, session.ErrNoSession) {
 			return err
 		}
-		cmds := session.Clean(raw, shell)
+		cmds := session.CleanEntries(raw, shell)
 		if len(cmds) == 0 {
 			os.Remove(path)
 			fmt.Println("Session ended; nothing left to remember.")
@@ -114,11 +127,11 @@ finished session and removes it once saved.`,
 			}
 		}
 
-		raw, err := session.Read(path)
+		raw, err := session.ReadEntries(path)
 		if err != nil {
 			return err
 		}
-		cmds := session.Clean(raw, session.ShellOf(path))
+		cmds := session.CleanEntries(raw, session.ShellOf(path))
 		if n := rememberFlags.last; n > 0 && len(cmds) > n {
 			cmds = cmds[len(cmds)-n:]
 		}
@@ -140,7 +153,12 @@ finished session and removes it once saved.`,
 			Tags:        rememberFlags.tags,
 		}
 		for _, c := range cmds {
-			m.Commands = append(m.Commands, storage.Command{Command: c})
+			sc := storage.Command{Command: c.Command}
+			if c.Output != "" {
+				out := c.Output
+				sc.Output = &out
+			}
+			m.Commands = append(m.Commands, sc)
 		}
 
 		if !rememberFlags.force {
@@ -174,6 +192,7 @@ finished session and removes it once saved.`,
 
 func init() {
 	watchCmd.Flags().StringVar(&watchFlags.shell, "shell", "", "shell to record (bash, zsh or fish; default $SHELL)")
+	watchCmd.Flags().BoolVar(&watchFlags.noOutput, "no-output", false, "record commands only, not their output")
 
 	rememberCmd.Flags().StringArrayVarP(&rememberFlags.tags, "tag", "t", nil, "tag to assign")
 	rememberCmd.Flags().StringVarP(&rememberFlags.description, "description", "d", "", "longer description of the memory")

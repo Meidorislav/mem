@@ -152,3 +152,66 @@ func TestKeywordIndexRebuiltOnUpgrade(t *testing.T) {
 		t.Errorf("after rebuild KeywordSearch(логи) = %v, want [%d]", got, id)
 	}
 }
+
+func TestKeywordSearchOutput(t *testing.T) {
+	store := newTestStore(t)
+	out := "dial tcp 10.0.0.5:5432: connect: connection refused"
+	m := &Memory{Title: "db check", Source: SourceRemember,
+		Commands: []Command{{Command: "psql -h 10.0.0.5"}, {Command: "uptime"}}}
+	m.Commands[0].Output = &out
+	if err := store.SaveMemory(m); err != nil {
+		t.Fatal(err)
+	}
+	other := saveTestMemory(t, store, "unrelated", []string{"ls"}, nil)
+
+	got, err := store.KeywordSearch("connection refused", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, []int64{m.ID}) {
+		t.Errorf("KeywordSearch(connection refused) = %v, want [%d] (not %d)", got, m.ID, other)
+	}
+
+	// Outputs survive a round trip through the database.
+	back, err := store.GetMemory(m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Commands[0].Output == nil || *back.Commands[0].Output != out || back.Commands[1].Output != nil {
+		t.Errorf("outputs = %v, %v", back.Commands[0].Output, back.Commands[1].Output)
+	}
+}
+
+func TestKeywordIndexGainsOutputColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	store, err := NewStoreAt(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := "permission denied"
+	m := &Memory{Title: "old memory", Source: SourceSave, Commands: []Command{{Command: "cat x", Output: &out}}}
+	if err := store.SaveMemory(m); err != nil {
+		t.Fatal(err)
+	}
+	// Leave the index as version 1 had it: no output column, no output text.
+	for _, q := range []string{
+		"DROP TABLE memory_fts",
+		"CREATE VIRTUAL TABLE memory_fts USING fts5(title, description, tags, commands, tokenize = 'unicode61 remove_diacritics 2')",
+		"INSERT INTO memory_fts (rowid, title, description, tags, commands) VALUES (1, 'old memory', '', '', 'cat x')",
+		"PRAGMA user_version = 1",
+	} {
+		if _, err := store.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store.Close()
+
+	store, err = NewStoreAt(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer store.Close()
+	if got, _ := store.KeywordSearch("denied", 10); !reflect.DeepEqual(got, []int64{m.ID}) {
+		t.Errorf("KeywordSearch(denied) after upgrade = %v, want [%d]", got, m.ID)
+	}
+}

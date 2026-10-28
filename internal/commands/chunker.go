@@ -47,7 +47,7 @@ func ChunkMemory(m *storage.Memory) []Chunk {
 
 	// 2. Command chunks
 	for _, cmd := range m.Commands {
-		text := fmt.Sprintf("%s%s%s%s", cmd.Command, noteStr, descStr, tagsStr)
+		text := fmt.Sprintf("%s%s%s%s%s", cmd.Command, outputStr(cmd.Output), noteStr, descStr, tagsStr)
 
 		// Create a local copy of ID since we take pointer
 		cmdID := cmd.ID
@@ -62,6 +62,37 @@ func ChunkMemory(m *storage.Memory) []Chunk {
 	}
 
 	return chunks
+}
+
+// Only the end of a command's output goes into its chunk: that is where the
+// error or the result is, and the rest would drown the command itself. Full
+// output is searchable through the keyword index.
+const (
+	outputTailLines = 3
+	outputTailRunes = 240
+)
+
+// outputStr renders the tail of out as " | output: ..." for a chunk, or ""
+// when there is none.
+func outputStr(out *string) string {
+	if out == nil {
+		return ""
+	}
+	var tail []string
+	lines := strings.Split(*out, "\n")
+	for i := len(lines) - 1; i >= 0 && len(tail) < outputTailLines; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" {
+			tail = append([]string{l}, tail...)
+		}
+	}
+	if len(tail) == 0 {
+		return ""
+	}
+	text := strings.Join(tail, " / ")
+	if r := []rune(text); len(r) > outputTailRunes {
+		text = "…" + string(r[len(r)-outputTailRunes:])
+	}
+	return " | output: " + text
 }
 
 func hashText(text string) string {

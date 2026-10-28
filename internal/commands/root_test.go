@@ -78,3 +78,23 @@ func TestFormatSearchResults_ScoresAndMultiLine(t *testing.T) {
 		t.Errorf("expected indented continuation lines, got %q", out)
 	}
 }
+
+func TestFormatResultsOutput(t *testing.T) {
+	out := "ok\nfailed: boom"
+	memories := []storage.Memory{{
+		ID:    1,
+		Title: "deploy",
+		Commands: []storage.Command{
+			{Command: "make deploy", Output: &out},
+			{Command: "echo done"},
+		},
+	}}
+
+	if got := formatSearchResults(memories, nil); strings.Contains(got, "boom") {
+		t.Errorf("output shown without --output: %q", got)
+	}
+	want := "   $ make deploy\n   │ ok\n   │ failed: boom\n   $ echo done"
+	if got := formatResults(memories, nil, true); !strings.Contains(got, want) {
+		t.Errorf("formatResults = %q, want it to contain %q", got, want)
+	}
+}

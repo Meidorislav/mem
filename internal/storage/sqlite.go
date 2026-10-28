@@ -16,6 +16,13 @@ import (
 // ErrNotFound is returned when a requested memory does not exist.
 var ErrNotFound = errors.New("memory not found")
 
+// ftsTable creates the keyword index. Changing its columns needs an
+// ftsVersion bump: syncFTS then drops the old table and rebuilds it.
+const ftsTable = `CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+  title, description, tags, commands, output,
+  tokenize = 'unicode61 remove_diacritics 2'
+);`
+
 const schema = `
 -- Memory entry
 CREATE TABLE IF NOT EXISTS memories (
@@ -83,10 +90,7 @@ CREATE INDEX IF NOT EXISTS idx_memories_created_at   ON memories(created_at);
 
 -- Full-text index for keyword search; rowid is the memory id. Rows are
 -- written by SaveMemory and removed by the trigger below.
-CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
-  title, description, tags, commands,
-  tokenize = 'unicode61 remove_diacritics 2'
-);
+` + ftsTable + `
 
 CREATE TRIGGER IF NOT EXISTS memories_fts_delete AFTER DELETE ON memories BEGIN
   DELETE FROM memory_fts WHERE rowid = old.id;
@@ -134,7 +138,8 @@ func NewStoreAt(dbPath string) (*Store, error) {
 // ftsVersion is stored in PRAGMA user_version. Bump it when the text
 // written to memory_fts changes, so existing databases rebuild the index.
 // 1: words stemmed (see ftsText).
-const ftsVersion = 1
+// 2: output column.
+const ftsVersion = 2
 
 // syncFTS keeps memory_fts complete: it rebuilds the index when it was
 // written by an older version, and otherwise indexes memories missing from
@@ -176,11 +181,14 @@ func (s *Store) syncFTS() error {
 	}
 	defer tx.Rollback()
 
-	prune := "DELETE FROM memory_fts WHERE rowid NOT IN (SELECT id FROM memories)"
 	if version < ftsVersion {
-		prune = "DELETE FROM memory_fts"
-	}
-	if _, err := tx.Exec(prune); err != nil {
+		// The columns may have changed, so recreate the table.
+		for _, q := range []string{"DROP TABLE IF EXISTS memory_fts", ftsTable} {
+			if _, err := tx.Exec(q); err != nil {
+				return fmt.Errorf("recreating keyword index: %w", err)
+			}
+		}
+	} else if _, err := tx.Exec("DELETE FROM memory_fts WHERE rowid NOT IN (SELECT id FROM memories)"); err != nil {
 		return fmt.Errorf("pruning keyword index: %w", err)
 	}
 	for i := range memories {
@@ -218,13 +226,18 @@ func (s *Store) queryIDs(query string, args ...any) ([]int64, error) {
 // insertFTS writes m's keyword index row.
 func insertFTS(tx *sql.Tx, m *Memory) error {
 	cmds := make([]string, len(m.Commands))
+	var outputs []string
 	for i, c := range m.Commands {
 		cmds[i] = c.Command
+		if c.Output != nil {
+			outputs = append(outputs, *c.Output)
+		}
 	}
 	_, err := tx.Exec(`
-		INSERT INTO memory_fts (rowid, title, description, tags, commands)
-		VALUES (?, ?, ?, ?, ?)
-	`, m.ID, ftsText(m.Title), ftsText(m.Description), ftsText(strings.Join(m.Tags, " ")), ftsText(strings.Join(cmds, "\n")))
+		INSERT INTO memory_fts (rowid, title, description, tags, commands, output)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, m.ID, ftsText(m.Title), ftsText(m.Description), ftsText(strings.Join(m.Tags, " ")),
+		ftsText(strings.Join(cmds, "\n")), ftsText(strings.Join(outputs, "\n")))
 	if err != nil {
 		return fmt.Errorf("index memory %d for keyword search: %w", m.ID, err)
 	}

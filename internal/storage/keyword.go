@@ -8,9 +8,10 @@ import (
 	"github.com/kljensen/snowball"
 )
 
-// bm25 column weights for memory_fts (title, description, tags, commands):
-// a hit in the title or a command says more than one in a long description.
-const ftsRank = "bm25(memory_fts, 3.0, 1.0, 2.0, 2.0)"
+// bm25 column weights for memory_fts (title, description, tags, commands,
+// output): a hit in the title or a command says more than one in a long
+// description, and output is the noisiest text of all.
+const ftsRank = "bm25(memory_fts, 3.0, 1.0, 2.0, 2.0, 0.5)"
 
 // KeywordSearch returns IDs of memories whose text contains words from
 // query, best match first. It complements semantic search for exact tokens
