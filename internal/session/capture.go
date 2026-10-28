@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/creack/pty"
@@ -167,6 +169,25 @@ func (r *Recorder) flush() {
 	}
 	defer f.Close()
 	fmt.Fprintf(f, "%c%s\x00", recordMark, out)
+}
+
+// BashVersion returns the version of the bash executable at path, e.g. "3.2".
+func BashVersion(path string) (string, error) {
+	out, err := exec.Command(path, "-c", `echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"`).Output()
+	if err != nil {
+		return "", fmt.Errorf("asking %s for its version: %w", path, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// BashCanCapture reports whether a bash of the given version ("4.4") has
+// PS0, which output capture needs to see where a command starts.
+func BashCanCapture(version string) bool {
+	var major, minor int
+	if _, err := fmt.Sscanf(version, "%d.%d", &major, &minor); err != nil {
+		return false
+	}
+	return major > 4 || (major == 4 && minor >= 4)
 }
 
 // RunCaptured starts the shell on a pseudo-terminal wired to in and out (usually

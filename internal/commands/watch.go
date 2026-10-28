@@ -44,7 +44,7 @@ such as vim are not captured. Use --no-output to record commands only.`,
 		if err != nil {
 			return err
 		}
-		_, shell, err := session.ResolveShell(watchFlags.shell)
+		shellPath, shell, err := session.ResolveShell(watchFlags.shell)
 		if err != nil {
 			return err
 		}
@@ -68,6 +68,15 @@ such as vim are not captured. Use --no-output to record commands only.`,
 		defer signal.Stop(sigs)
 
 		capture := !watchFlags.noOutput && term.IsTerminal(int(os.Stdin.Fd()))
+		if capture && shell == "bash" {
+			// Without PS0 nothing marks where a command starts, so there
+			// would be no output to record.
+			if v, err := session.BashVersion(shellPath); err == nil && !session.BashCanCapture(v) {
+				fmt.Fprintf(os.Stderr, "Warning: %s is bash %s; output capture needs bash 4.4+, so only commands are recorded.\n"+
+					"         Install a newer bash (e.g. `brew install bash` and --shell $(brew --prefix)/bin/bash) or use zsh.\n", shellPath, v)
+				capture = false
+			}
+		}
 		fmt.Printf("Recording %s session. Run `mem remember \"title\"` to save it, `exit` to stop.\n", sh.Name)
 		if capture {
 			err = sh.RunCaptured(os.Stdin, os.Stdout, path)
