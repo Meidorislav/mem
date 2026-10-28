@@ -106,8 +106,13 @@ func TestRecorderLongOutputKeepsEnds(t *testing.T) {
 }
 
 func TestRunCapturedBash(t *testing.T) {
-	if _, err := os.Stat("/bin/bash"); err != nil {
+	bash, _, err := ResolveShell("bash")
+	if err != nil {
 		t.Skip("bash not available")
+	}
+	// Output capture needs PS0, added in bash 4.4 (macOS ships 3.2).
+	if v, err := BashVersion(bash); err != nil || !BashCanCapture(v) {
+		t.Skipf("bash %q has no PS0 (%v)", v, err)
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -172,5 +177,13 @@ func TestRunCapturedBash(t *testing.T) {
 	}
 	if strings.Contains(shown.String(), "777;mem") {
 		t.Errorf("markers leaked to the terminal: %q", shown.String())
+	}
+}
+
+func TestBashCanCapture(t *testing.T) {
+	for v, want := range map[string]bool{"3.2": false, "4.3": false, "4.4": true, "5.0": true, "5.2": true, "": false, "x": false} {
+		if got := BashCanCapture(v); got != want {
+			t.Errorf("BashCanCapture(%q) = %v, want %v", v, got, want)
+		}
 	}
 }
